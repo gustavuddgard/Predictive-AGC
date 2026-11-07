@@ -18,9 +18,12 @@ The gain meter is the current rider in decibels. The engage lamp follows the lat
 
 ## Build
 
-The DSP and `agc_tests` need a C++17 compiler. The plugin needs [JUCE](https://github.com/juce-framework/JUCE) 8.0.8, which CMake fetches, and a Linux or macOS toolchain.
+Run these from the project directory, the folder that contains `CMakeLists.txt`. They do not work from your home folder.
+
+The DSP and `agc_tests` need a C++17 compiler. The plugin needs [JUCE](https://github.com/juce-framework/JUCE) 8.0.8, which CMake fetches, and a Linux or macOS toolchain. On a Mac, install CMake and the Xcode command line tools first.
 
 ```bash
+cd /path/to/this/project
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
@@ -29,6 +32,7 @@ ctest --test-dir build --output-on-failure
 On Linux this builds the Standalone app and the test binary. An Audio Unit is what Logic Pro loads, and that format is built only on macOS:
 
 ```bash
+cd /path/to/this/project
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --target AGC2_AU
 ```
@@ -37,7 +41,7 @@ The Standalone target is built alongside it.
 
 ## Logic Pro
 
-Copy the built component into the user plug-in folder and rescan:
+From that same project directory, copy the built component into the user plug-in folder and rescan:
 
 ```bash
 cp -R "build/AGC2_artefacts/Release/AU/AGC 2.0.component" \

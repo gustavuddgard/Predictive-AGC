@@ -30,6 +30,10 @@ The sidechain row ducks the main signal from a second track. In Logic, choose th
 
 The gain meter is the current rider in decibels. The engage lamp follows the latch, with brightness from the model probability.
 
+## Presets
+
+The plug-in menu has two factory presets. **Default** is the voice leveler. **Money for Nothing** is for a full-scale master such as the 1996 Brothers in Arms remaster, which already peaks at 0 dBFS. Its peak follower sits near −13 dB, so a −18 dB target ducks the riff and pumps on the snare. The preset puts the target at −6 dB, allows no boost, ducks 15% of only those hottest hits, and uses the slowest release. Sidechain depth is 0, so the highs are left alone. On that master the rider moves by less than 0.2 dB and the song stays at its own level.
+
 ## Build
 
 Run these from the project directory, the folder that contains `CMakeLists.txt`. They do not work from your home folder.

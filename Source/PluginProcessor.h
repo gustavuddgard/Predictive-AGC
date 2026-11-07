@@ -49,9 +49,12 @@ public:
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
+    void applyProgram(int index);
+
     dsp::PredictiveAGC mAGC;
     dsp::PredictiveDucker mDucker;
     juce::AudioBuffer<float> scratch;
+    int currentProgram = 0;
     std::atomic<float> displayedGainDb { 0.0f };
     std::atomic<float> displayedEngage { 0.0f };
     std::atomic<bool> displayedEngaged { false };

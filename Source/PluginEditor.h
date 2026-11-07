@@ -24,6 +24,7 @@ private:
     juce::Label title;
     juce::Label subtitle;
     juce::Label latencyReadout;
+    juce::ComboBox presetBox;
     juce::Label levelerHeading;
     juce::Label sidechainHeading;
 

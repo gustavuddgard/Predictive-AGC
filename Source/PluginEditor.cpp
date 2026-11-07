@@ -100,6 +100,19 @@ Agc2AudioProcessorEditor::Agc2AudioProcessorEditor(Agc2AudioProcessor& owner)
     addAndMakeVisible(subtitle);
 
     latencyReadout.setText("2.5 ms", juce::dontSendNotification);
+
+    for (int index = 0; index < owner.getNumPrograms(); ++index)
+        presetBox.addItem(owner.getProgramName(index), index + 1);
+    presetBox.setSelectedId(owner.getCurrentProgram() + 1, juce::dontSendNotification);
+    presetBox.setColour(juce::ComboBox::backgroundColourId, panel);
+    presetBox.setColour(juce::ComboBox::textColourId, text);
+    presetBox.setColour(juce::ComboBox::outlineColourId, juce::Colour(0xff3c413c));
+    presetBox.setColour(juce::ComboBox::arrowColourId, amber);
+    presetBox.onChange = [this]
+    {
+        agc().setCurrentProgram(presetBox.getSelectedId() - 1);
+    };
+    addAndMakeVisible(presetBox);
     latencyReadout.setFont(juce::Font(juce::FontOptions(16.0f, juce::Font::bold)));
     latencyReadout.setColour(juce::Label::textColourId, amber);
     latencyReadout.setJustificationType(juce::Justification::centredRight);
@@ -184,6 +197,11 @@ void Agc2AudioProcessorEditor::timerCallback()
         const double milliseconds = 1000.0 * static_cast<double>(agc().getLatencySamples()) / rate;
         latencyReadout.setText(juce::String(milliseconds, 1) + " ms", juce::dontSendNotification);
     }
+
+    const int presetId = agc().getCurrentProgram() + 1;
+    if (presetBox.getSelectedId() != presetId)
+        presetBox.setSelectedId(presetId, juce::dontSendNotification);
+
     repaint();
 }
 
@@ -246,6 +264,7 @@ void Agc2AudioProcessorEditor::resized()
     auto area = getLocalBounds().reduced(20, 16);
     auto header = area.removeFromTop(48);
     latencyReadout.setBounds(header.removeFromRight(88));
+    presetBox.setBounds(header.removeFromRight(230).reduced(8, 10));
     title.setBounds(header.removeFromTop(28));
     subtitle.setBounds(header);
 

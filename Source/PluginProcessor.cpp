@@ -215,23 +215,109 @@ bool Agc2AudioProcessor::producesMidi() const { return false; }
 bool Agc2AudioProcessor::isMidiEffect() const { return false; }
 double Agc2AudioProcessor::getTailLengthSeconds() const { return 0.0; }
 
-int Agc2AudioProcessor::getNumPrograms() { return 1; }
-int Agc2AudioProcessor::getCurrentProgram() { return 0; }
-void Agc2AudioProcessor::setCurrentProgram(int) {}
-const juce::String Agc2AudioProcessor::getProgramName(int) { return {}; }
+namespace
+{
+struct Program
+{
+    const char* name;
+    float target;
+    float maxBoost;
+    float maxCut;
+    float duck;
+    float vad;
+    float speed;
+    float depth;
+    float threshold;
+    float release;
+    float crossover;
+    float sense;
+    bool link;
+};
+
+// Money for Nothing is a full-scale 1996 master: sample peaks sit on 0 dBFS and
+// the 20 ms peak follower lives around -13 dB. A -18 dB target therefore ducks
+// the whole song. This program only trims hits that reach -6 dB, with no boost
+// and a slow release, so the riff is not ridden.
+const Program programs[] = {
+    { "Default", -18.0f, 6.0f, 24.0f, 0.40f, -42.0f, 0.50f, 0.50f, -24.0f, 300.0f, 300.0f, -45.0f, true },
+    { "Money for Nothing", -6.0f, 0.0f, 3.0f, 0.15f, -30.0f, 0.00f, 0.00f, 0.0f, 1000.0f, 300.0f, -20.0f, true },
+};
+} // namespace
+
+int Agc2AudioProcessor::getNumPrograms()
+{
+    return static_cast<int>(std::size(programs));
+}
+
+int Agc2AudioProcessor::getCurrentProgram()
+{
+    return currentProgram;
+}
+
+void Agc2AudioProcessor::setCurrentProgram(int index)
+{
+    if (index < 0 || index >= getNumPrograms())
+        return;
+
+    currentProgram = index;
+    applyProgram(index);
+}
+
+const juce::String Agc2AudioProcessor::getProgramName(int index)
+{
+    if (index < 0 || index >= getNumPrograms())
+        return {};
+
+    return programs[index].name;
+}
+
 void Agc2AudioProcessor::changeProgramName(int, const juce::String&) {}
+
+void Agc2AudioProcessor::applyProgram(int index)
+{
+    const Program& program = programs[index];
+
+    auto setFloat = [this](const char* id, float value)
+    {
+        if (auto* parameter = dynamic_cast<juce::RangedAudioParameter*>(apvts.getParameter(id)))
+            parameter->setValueNotifyingHost(parameter->convertTo0to1(value));
+    };
+
+    setFloat("target", program.target);
+    setFloat("maxBoost", program.maxBoost);
+    setFloat("maxCut", program.maxCut);
+    setFloat("duck", program.duck);
+    setFloat("vad", program.vad);
+    setFloat("speed", program.speed);
+    setFloat("duckDepth", program.depth);
+    setFloat("scThreshold", program.threshold);
+    setFloat("scRelease", program.release);
+    setFloat("crossover", program.crossover);
+    setFloat("scVad", program.sense);
+    setFloat("link", program.link ? 1.0f : 0.0f);
+    setFloat("bypass", 0.0f);
+}
 
 void Agc2AudioProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
-    if (const auto xml = apvts.copyState().createXml())
+    auto state = apvts.copyState();
+    state.setProperty("program", currentProgram, nullptr);
+
+    if (const auto xml = state.createXml())
         copyXmlToBinary(*xml, destData);
 }
 
 void Agc2AudioProcessor::setStateInformation(const void* data, int sizeInBytes)
 {
     if (const auto xml = getXmlFromBinary(data, sizeInBytes))
+    {
         if (xml->hasTagName(apvts.state.getType()))
+        {
             apvts.replaceState(juce::ValueTree::fromXml(*xml));
+            currentProgram = juce::jlimit(0, getNumPrograms() - 1,
+                                           static_cast<int>(apvts.state.getProperty("program", 0)));
+        }
+    }
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

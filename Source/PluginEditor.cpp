@@ -76,9 +76,13 @@ public:
     }
 };
 
+Agc2AudioProcessor& Agc2AudioProcessorEditor::agc()
+{
+    return static_cast<Agc2AudioProcessor&>(processor);
+}
+
 Agc2AudioProcessorEditor::Agc2AudioProcessorEditor(Agc2AudioProcessor& owner)
     : juce::AudioProcessorEditor(owner)
-    , processor(owner)
     , lookAndFeel(std::make_unique<LookAndFeel>())
 {
     setLookAndFeel(lookAndFeel.get());
@@ -111,7 +115,7 @@ Agc2AudioProcessorEditor::Agc2AudioProcessorEditor(Agc2AudioProcessor& owner)
     addAndMakeVisible(link);
     addAndMakeVisible(bypass);
 
-    auto& state = processor.apvts;
+    auto& state = agc().apvts;
     targetAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "target", target);
     boostAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "maxBoost", maxBoost);
     cutAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "maxCut", maxCut);
@@ -146,9 +150,9 @@ void Agc2AudioProcessorEditor::configureKnob(juce::Slider& slider, juce::Label& 
 
 void Agc2AudioProcessorEditor::timerCallback()
 {
-    gainDb = processor.getDisplayedGainDb();
-    engageProbability = processor.getDisplayedEngage();
-    engaged = processor.getDisplayedEngaged();
+    gainDb = agc().getDisplayedGainDb();
+    engageProbability = agc().getDisplayedEngage();
+    engaged = agc().getDisplayedEngaged();
     repaint();
 }
 

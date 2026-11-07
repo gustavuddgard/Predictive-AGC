@@ -17,8 +17,8 @@ private:
 
     void timerCallback() override;
     void configureKnob(juce::Slider& slider, juce::Label& name, const juce::String& title);
+    Agc2AudioProcessor& agc();
 
-    Agc2AudioProcessor& processor;
     std::unique_ptr<LookAndFeel> lookAndFeel;
 
     juce::Label title;

@@ -48,7 +48,18 @@ cp -R "build/AGC2_artefacts/Release/AU/AGC 2.0.component" \
   ~/Library/Audio/Plug-Ins/Components/
 ```
 
-In Logic, open Settings → Plug-in Manager and reset or rescan. The plug-in reports 1.5 ms of latency so Logic's delay compensation can line the track up. Validate it with:
+Logic only lists the plug-in after the bundle is signed. The Mac build signs it. If a copy is already installed, sign that one too:
+
+```bash
+codesign --force --deep --sign - \
+  "$HOME/Library/Audio/Plug-Ins/Components/AGC 2.0.component"
+xattr -cr "$HOME/Library/Audio/Plug-Ins/Components/AGC 2.0.component"
+killall -9 AudioComponentRegistrar 2>/dev/null || true
+rm -rf "$HOME/Library/Caches/AudioUnitCache"
+auval -v aufx Ag20 AgcL
+```
+
+Then open Logic's Settings → Plug-in Manager and reset or rescan. It is an audio effect under the manufacturer AGC, not a MIDI effect. The plug-in reports 1.5 ms of latency so Logic's delay compensation can line the track up. Validate it with:
 
 ```bash
 auval -v aufx Ag20 AgcL

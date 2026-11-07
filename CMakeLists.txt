@@ -92,6 +92,13 @@ target_link_libraries(AGC2
         juce::juce_recommended_warning_flags
 )
 
+# Logic skips an unsigned Audio Unit. Ad-hoc sign the bundle after each Mac build.
+if(TARGET AGC2_AU)
+    add_custom_command(TARGET AGC2_AU POST_BUILD
+        COMMAND codesign --force --deep --sign - "$<TARGET_BUNDLE_DIR:AGC2_AU>"
+        VERBATIM)
+endif()
+
 # CMake 3.28 drops these rules while configuring JUCE. Put them back so generate succeeds.
 if(NOT CMAKE_C_COMPILE_OBJECT)
     set(CMAKE_C_COMPILE_OBJECT "<CMAKE_C_COMPILER> <DEFINES> <INCLUDES> <FLAGS> -o <OBJECT> -c <SOURCE>")

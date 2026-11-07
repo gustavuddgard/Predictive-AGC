@@ -10,6 +10,7 @@ namespace
 {
 constexpr double gateDb = -60.0;
 constexpr double kneeDb = 6.0;
+constexpr float maxBoostCeilingDb = 6.0f;
 constexpr float engageOn = 0.6f;
 constexpr float engageOff = 0.4f;
 constexpr int inferInterval = 8;
@@ -79,7 +80,9 @@ float PredictiveAGC::modelProbability(const float features[6])
 
 void PredictiveAGC::updateCoefficients()
 {
-    const float releaseMs = 400.0f - speed * (400.0f - 30.0f);
+    // Speed 0.5 is a 400 ms release. The fast end is 200 ms, so recovery between
+    // words cannot snap back the way an 80 ms release does.
+    const float releaseMs = 400.0f * std::pow(2.0f, 1.0f - 2.0f * speed);
     const double hangMs = 20.0 * (1.0 - static_cast<double>(speed));
 
     peakReleaseCoef = timeCoef(0.020, sampleRate);
@@ -88,9 +91,9 @@ void PredictiveAGC::updateCoefficients()
     accelCoef = timeCoef(0.0005, sampleRate);
     attackCoef = timeCoef(0.0005, sampleRate);
     releaseCoef = timeCoef(static_cast<double>(releaseMs) * 0.001, sampleRate);
-    silenceCoef = timeCoef(0.100, sampleRate);
     bypassCoef = timeCoef(0.005, sampleRate);
     hangSamples = static_cast<int>(std::llround(hangMs * 0.001 * sampleRate));
+    vadHoldBudget = std::max(1, static_cast<int>(std::llround(0.012 * sampleRate)));
 }
 
 void PredictiveAGC::prepare(double newSampleRate, int numChannels)
@@ -113,7 +116,15 @@ void PredictiveAGC::reset()
 
 void PredictiveAGC::setTargetDecibels(float db) { targetDb = db; }
 
-void PredictiveAGC::setMaxBoostDecibels(float db) { maxBoostDb = std::max(0.0f, db); }
+void PredictiveAGC::setMaxBoostDecibels(float db)
+{
+    maxBoostDb = std::clamp(db, 0.0f, maxBoostCeilingDb);
+}
+
+void PredictiveAGC::setVadThresholdDecibels(float db)
+{
+    vadThresholdDb = std::clamp(db, -80.0f, 0.0f);
+}
 
 void PredictiveAGC::setMaxCutDecibels(float db) { maxCutDb = std::max(0.0f, db); }
 
@@ -151,6 +162,28 @@ int PredictiveAGC::getLatencySamples() const
 void PredictiveAGC::updateDetector(Channel& channel, float magnitude)
 {
     const double mag = static_cast<double>(std::max(0.0f, magnitude));
+    const double vadLinear = std::pow(10.0, static_cast<double>(vadThresholdDb) / 20.0);
+    // Hold across a waveform cycle so a quiet voice is not marked silent at
+    // every zero crossing. A real pause still closes within about 12 ms.
+    if (mag >= vadLinear)
+        channel.vadHoldSamples = vadHoldBudget;
+    else if (channel.vadHoldSamples > 0)
+        --channel.vadHoldSamples;
+    channel.vadOpen = channel.vadHoldSamples > 0;
+
+    // A pause below the noise floor is not speech. Freeze the envelope so the
+    // rider does not see the room and ask for more gain.
+    if (!channel.vadOpen)
+    {
+        channel.slope += slopeCoef * (0.0 - channel.slope);
+        channel.acceleration += accelCoef * (0.0 - channel.acceleration);
+        channel.previousSlope = channel.slope;
+        channel.latched = false;
+        channel.probability = 0.0f;
+        ++channel.sampleCount;
+        return;
+    }
+
     if (mag > channel.peak)
         channel.peak = mag;
     else
@@ -205,13 +238,14 @@ void PredictiveAGC::updateGain(Channel& channel)
         desired = 0.0;
         coef = bypassCoef;
     }
-    else if (channel.levelDb < gateDb)
+    else if (!channel.vadOpen)
     {
+        // alpha_hold = 1. The release filter does not move, so a pause cannot
+        // boost the room or breathe back toward unity.
         channel.latched = false;
         channel.hangLeft = 0;
         channel.releaseArmed = true;
-        desired = 0.0;
-        coef = silenceCoef;
+        coef = 0.0;
     }
     else if (!channel.latched)
     {

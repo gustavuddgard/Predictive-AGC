@@ -158,7 +158,7 @@ void testStepIsCaughtInsideTheDelay()
               + " dB, out " + std::to_string(outPeak) + " dB)");
 }
 
-void testSilenceReturnsToUnity()
+void testPauseHoldsGain()
 {
     constexpr double rate = 48000.0;
     dsp::PredictiveAGC agc;
@@ -167,16 +167,58 @@ void testSilenceReturnsToUnity()
     const int hotSamples = static_cast<int>(0.15 * rate);
     auto hot = tone(rate, -6.0f, hotSamples);
     render(agc, hot, 64);
-    check(agc.getGainDecibels() < -6.0f, "hot signal engages a real cut, gain " + std::to_string(agc.getGainDecibels()));
+    const float held = agc.getGainDecibels();
+    check(held < -6.0f, "hot signal engages a real cut, gain " + std::to_string(held));
     check(agc.isEngaged(), "hot signal is latched");
 
     const int silentSamples = static_cast<int>(rate);
     std::vector<float> silence(static_cast<size_t>(silentSamples), 0.0f);
     render(agc, silence, 128);
 
-    check(!agc.isEngaged(), "silence stays disengaged");
-    check(std::abs(agc.getGainDecibels()) < 1.0f,
-          "silence settles near unity, gain " + std::to_string(agc.getGainDecibels()));
+    check(!agc.isEngaged(), "a pause below the noise floor lets go of the latch");
+    check(std::abs(agc.getGainDecibels() - held) < 0.25f,
+          "pause holds the gain instead of breathing, held " + std::to_string(held)
+              + " now " + std::to_string(agc.getGainDecibels()));
+}
+
+void testNoiseFloorIsNotBoosted()
+{
+    constexpr double rate = 48000.0;
+    dsp::PredictiveAGC agc;
+    agc.prepare(rate, 1);
+    const int total = static_cast<int>(0.30 * rate);
+    const auto dry = tone(rate, -50.0f, total);
+    auto wet = dry;
+    render(agc, wet, 64);
+
+    check(std::abs(agc.getGainDecibels()) < 0.5f,
+          "signal under the noise floor is not boosted, gain " + std::to_string(agc.getGainDecibels()));
+    check(!agc.isEngaged(), "signal under the noise floor stays disengaged");
+
+    const int latency = agc.getLatencySamples();
+    float maxDiff = 0.0f;
+    for (int i = latency + 1000; i < total; ++i)
+        maxDiff = std::max(maxDiff, std::abs(wet[static_cast<size_t>(i)] - dry[static_cast<size_t>(i - latency)]));
+    check(maxDiff < 1.0e-4f, "noise-floor signal is left alone, max diff " + std::to_string(maxDiff));
+}
+
+void testBoostIsCappedAtSixDb()
+{
+    constexpr double rate = 48000.0;
+    dsp::PredictiveAGC agc;
+    agc.prepare(rate, 1);
+    agc.setMaxBoostDecibels(18.0f);
+
+    const int total = static_cast<int>(2.0 * rate);
+    auto buffer = tone(rate, -36.0f, total);
+    render(agc, buffer, 128);
+
+    const float gain = agc.getGainDecibels();
+    check(gain <= 6.05f, "boost stays at or under +6 dB, was " + std::to_string(gain));
+    check(gain > 5.0f, "a quiet voiced signal still gets the allowed boost, was " + std::to_string(gain));
+
+    const float out = peakDb(buffer, total - static_cast<int>(0.2 * rate), total);
+    check(out > -33.0f && out < -27.0f, "capped boost lands near -30 dB, was " + std::to_string(out));
 }
 
 void testLinkMovesBothChannels()
@@ -245,7 +287,9 @@ int main()
     testLatency();
     testSteadyToneIsLeftAlone();
     testStepIsCaughtInsideTheDelay();
-    testSilenceReturnsToUnity();
+    testPauseHoldsGain();
+    testNoiseFloorIsNotBoosted();
+    testBoostIsCappedAtSixDb();
     testLinkMovesBothChannels();
     testBlockSizeInvariance();
 

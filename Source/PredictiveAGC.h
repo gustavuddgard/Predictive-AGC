@@ -15,6 +15,7 @@ public:
     void setTargetDecibels(float db);
     void setMaxBoostDecibels(float db);
     void setMaxCutDecibels(float db);
+    void setVadThresholdDecibels(float db);
     void setSpeed(float normalised);
     void setLinked(bool shouldLink);
     void setBypassed(bool shouldBypass);
@@ -43,6 +44,8 @@ private:
         int writeIndex = 0;
         bool latched = false;
         bool releaseArmed = true;
+        bool vadOpen = false;
+        int vadHoldSamples = 0;
         static constexpr int delayCapacity = 1024;
         float delayStorage[delayCapacity] {};
     };
@@ -57,8 +60,9 @@ private:
 
     double sampleRate = 48000.0;
     float targetDb = -18.0f;
-    float maxBoostDb = 12.0f;
+    float maxBoostDb = 6.0f;
     float maxCutDb = 24.0f;
+    float vadThresholdDb = -42.0f;
     float speed = 0.5f;
     bool linked = true;
     bool bypassed = false;
@@ -72,9 +76,9 @@ private:
     double accelCoef = 0.0;
     double attackCoef = 0.0;
     double releaseCoef = 0.0;
-    double silenceCoef = 0.0;
     double bypassCoef = 0.0;
     int hangSamples = 0;
+    int vadHoldBudget = 1;
 
     static constexpr int maxChannels = 8;
     Channel channels[maxChannels];

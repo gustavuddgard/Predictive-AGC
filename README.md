@@ -2,15 +2,18 @@
 
 A stereo leveler for Logic Pro. Reported latency is **1.5 ms**, under a hard cap of 2 ms.
 
-The learned part is a four-unit network with 33 stored weights. It only decides when the leveler should engage. The gain amount is a deterministic rider: target minus the measured peak, through a 6 dB knee, clamped by max boost and max cut. A 1.5 ms delay lets the 0.5 ms engage attack land before the audio is heard. While the latch is off, gain holds, so a steady phrase does not pump. Below about −60 dB the latch is forced off and gain eases back to unity.
+The learned part is a four-unit network with 33 stored weights. It only decides when the leveler should engage. The gain amount is a deterministic rider: target minus the measured peak, through a 6 dB knee, clamped by max boost and max cut. A 1.5 ms delay lets the 0.5 ms engage attack land before the audio is heard. While the latch is off, gain holds, so a steady phrase does not pump.
 
-Speed does not slow the attack. That would miss the 1.5 ms window. Speed scales release from about 400 ms down to 30 ms, and a short hang.
+A pause under the noise floor freezes the envelope and the gain. The release filter does not lift room tone between words. At the default speed the release is 400 ms. Boost cannot exceed +6 dB.
+
+Speed does not slow the attack. That would miss the 1.5 ms window. Speed 50% is a 400 ms release, and faster still stops at 200 ms.
 
 ## Controls
 
 - **Target** — level to ride toward, default −18 dB.
-- **Max boost / Max cut** — gain limits, default +12 dB and −24 dB.
-- **Speed** — release and hang. Faster means a shorter release.
+- **Max boost / Max cut** — gain limits. Boost is capped at +6 dB. Cut defaults to −24 dB.
+- **Noise floor** — pauses under this level hold the current gain. Default −42 dB.
+- **Speed** — release and hang. 50% is a 400 ms release.
 - **Link** — one detector and one gain for every channel.
 - **Bypass** — fades gain to 0 dB and keeps the 1.5 ms delay, so latency does not jump.
 

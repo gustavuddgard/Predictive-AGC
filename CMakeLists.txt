@@ -18,6 +18,29 @@ target_compile_options(agc_tests PRIVATE -Wall -Wextra -Wpedantic)
 enable_testing()
 add_test(NAME agc_tests COMMAND agc_tests)
 
+# JUCE 8 rejects the Xcode 15.0 linker. That toolchain is still common, and it
+# ships the previous linker as ld_classic, which does not have the bug.
+if(APPLE)
+    string(APPEND CMAKE_C_FLAGS " -DJUCE_SILENCE_XCODE_15_LINKER_WARNING=1")
+    string(APPEND CMAKE_CXX_FLAGS " -DJUCE_SILENCE_XCODE_15_LINKER_WARNING=1")
+
+    execute_process(
+        COMMAND "${CMAKE_CXX_COMPILER}" -dM -E -x c /dev/null
+        OUTPUT_VARIABLE AGC_APPLE_PREDEFS
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(AGC_APPLE_PREDEFS MATCHES "__apple_build_version__ ([0-9]+)")
+        set(AGC_APPLE_BUILD "${CMAKE_MATCH_1}")
+        if(AGC_APPLE_BUILD GREATER_EQUAL 15000000 AND AGC_APPLE_BUILD LESS 15000100)
+            message(STATUS "Xcode 15.0 detected. Linking with ld_classic.")
+            foreach(agc_kind EXE SHARED MODULE)
+                string(APPEND CMAKE_${agc_kind}_LINKER_FLAGS " -Wl,-ld_classic")
+            endforeach()
+        endif()
+    endif()
+endif()
+
 include(FetchContent)
 FetchContent_Declare(
     JUCE

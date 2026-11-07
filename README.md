@@ -20,7 +20,7 @@ The gain meter is the current rider in decibels. The engage lamp follows the lat
 
 Run these from the project directory, the folder that contains `CMakeLists.txt`. They do not work from your home folder.
 
-The DSP and `agc_tests` need a C++17 compiler. The plugin needs [JUCE](https://github.com/juce-framework/JUCE) 8.0.8, which CMake fetches, and a Linux or macOS toolchain. On a Mac, install CMake and the Xcode command line tools first.
+The DSP and `agc_tests` need a C++17 compiler. The plugin needs [JUCE](https://github.com/juce-framework/JUCE) 8.0.8, which CMake fetches, and a Linux or macOS toolchain. On a Mac, install CMake and the Xcode command line tools first. Xcode 15.0 is accepted: the build uses Apple's classic linker, which avoids the broken linker in that release. Xcode 15.1 or newer uses the normal linker.
 
 ```bash
 cd /path/to/this/project

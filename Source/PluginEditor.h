@@ -1,0 +1,55 @@
+#pragma once
+
+#include "PluginProcessor.h"
+
+class Agc2AudioProcessorEditor : public juce::AudioProcessorEditor,
+                                 private juce::Timer
+{
+public:
+    explicit Agc2AudioProcessorEditor(Agc2AudioProcessor&);
+    ~Agc2AudioProcessorEditor() override;
+
+    void paint(juce::Graphics&) override;
+    void resized() override;
+
+private:
+    class LookAndFeel;
+
+    void timerCallback() override;
+    void configureKnob(juce::Slider& slider, juce::Label& name, const juce::String& title);
+
+    Agc2AudioProcessor& processor;
+    std::unique_ptr<LookAndFeel> lookAndFeel;
+
+    juce::Label title;
+    juce::Label subtitle;
+    juce::Label latencyReadout;
+
+    juce::Label targetName;
+    juce::Label boostName;
+    juce::Label cutName;
+    juce::Label speedName;
+    juce::Slider target;
+    juce::Slider maxBoost;
+    juce::Slider maxCut;
+    juce::Slider speed;
+
+    juce::TextButton link { "Link" };
+    juce::TextButton bypass { "Bypass" };
+
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> targetAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> boostAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> cutAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> speedAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> linkAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAttachment;
+
+    juce::Rectangle<int> meterArea;
+    juce::Rectangle<int> lampArea;
+    juce::Rectangle<int> lampLabelArea;
+    float gainDb = 0.0f;
+    float engageProbability = 0.0f;
+    bool engaged = false;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Agc2AudioProcessorEditor)
+};

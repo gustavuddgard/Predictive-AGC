@@ -93,13 +93,13 @@ Agc2AudioProcessorEditor::Agc2AudioProcessorEditor(Agc2AudioProcessor& owner)
     title.setJustificationType(juce::Justification::bottomLeft);
     addAndMakeVisible(title);
 
-    subtitle.setText("Predictive leveler", juce::dontSendNotification);
+    subtitle.setText("Adaptive leveler", juce::dontSendNotification);
     subtitle.setFont(juce::Font(juce::FontOptions(13.0f)));
     subtitle.setColour(juce::Label::textColourId, muted);
     subtitle.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(subtitle);
 
-    latencyReadout.setText("2.5 ms", juce::dontSendNotification);
+    latencyReadout.setText("2.0 ms", juce::dontSendNotification);
 
     for (int index = 0; index < owner.getNumPrograms(); ++index)
         presetBox.addItem(owner.getProgramName(index), index + 1);
@@ -119,11 +119,10 @@ Agc2AudioProcessorEditor::Agc2AudioProcessorEditor(Agc2AudioProcessor& owner)
     addAndMakeVisible(latencyReadout);
 
     configureKnob(target, targetName, "Target");
-    configureKnob(maxBoost, boostName, "Max boost");
-    configureKnob(maxCut, cutName, "Max cut");
-    configureKnob(noiseFloor, floorName, "Noise floor");
+    configureKnob(maxBoost, boostName, "Max gain");
+    configureKnob(maxCut, cutName, "Release");
+    configureKnob(noiseFloor, floorName, "VAD");
     configureKnob(duckAmount, duckName, "Duck");
-    configureKnob(speed, speedName, "Speed");
     configureKnob(lookahead, lookaheadName, "Lookahead");
     configureKnob(depth, depthName, "Depth");
     configureKnob(scThreshold, thresholdName, "Threshold");
@@ -136,6 +135,11 @@ Agc2AudioProcessorEditor::Agc2AudioProcessorEditor(Agc2AudioProcessor& owner)
     levelerHeading.setColour(juce::Label::textColourId, amber);
     addAndMakeVisible(levelerHeading);
 
+    classifierHeading.setText("Classifier", juce::dontSendNotification);
+    classifierHeading.setFont(juce::Font(juce::FontOptions(13.0f, juce::Font::bold)));
+    classifierHeading.setColour(juce::Label::textColourId, amber);
+    addAndMakeVisible(classifierHeading);
+
     sidechainHeading.setText("Sidechain", juce::dontSendNotification);
     sidechainHeading.setFont(juce::Font(juce::FontOptions(13.0f, juce::Font::bold)));
     sidechainHeading.setColour(juce::Label::textColourId, amber);
@@ -147,13 +151,12 @@ Agc2AudioProcessorEditor::Agc2AudioProcessorEditor(Agc2AudioProcessor& owner)
     addAndMakeVisible(bypass);
 
     auto& state = agc().apvts;
-    targetAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "target", target);
-    boostAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "maxBoost", maxBoost);
-    cutAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "maxCut", maxCut);
+    targetAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "targetLoudness", target);
+    boostAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "maxGainBoost", maxBoost);
+    cutAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "baseRelease", maxCut);
     floorAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "vad", noiseFloor);
     duckAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "duck", duckAmount);
-    speedAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "speed", speed);
-    lookaheadAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "lookahead", lookahead);
+    lookaheadAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "peakLookahead", lookahead);
     depthAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "duckDepth", depth);
     thresholdAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "scThreshold", scThreshold);
     releaseAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "scRelease", scRelease);
@@ -164,8 +167,8 @@ Agc2AudioProcessorEditor::Agc2AudioProcessorEditor(Agc2AudioProcessor& owner)
 
     setOpaque(true);
     setResizable(true, true);
-    setResizeLimits(900, 520, 1280, 820);
-    setSize(980, 620);
+    setResizeLimits(900, 560, 1280, 900);
+    setSize(980, 660);
     startTimerHz(30);
 }
 
@@ -192,6 +195,7 @@ void Agc2AudioProcessorEditor::timerCallback()
     gainDb = agc().getDisplayedGainDb();
     engageProbability = agc().getDisplayedEngage();
     engaged = agc().getDisplayedEngaged();
+    shownClass = agc().getDisplayedClass();
 
     const double rate = agc().getSampleRate();
     if (rate > 0.0)
@@ -258,7 +262,23 @@ void Agc2AudioProcessorEditor::paint(juce::Graphics& g)
 
     g.setColour(muted);
     g.setFont(juce::Font(juce::FontOptions(12.0f)));
-    g.drawText("Engage", lampLabelArea, juce::Justification::centred);
+    g.drawText("Peak", lampLabelArea, juce::Justification::centred);
+
+    if (!classifierArea.isEmpty())
+    {
+        static const char* names[] = { "Silence", "Music", "Voice", "Telephone", "Stresser" };
+        const int slot = classifierArea.getWidth() / 5;
+        for (int index = 0; index < 5; ++index)
+        {
+            auto cell = classifierArea.withX(classifierArea.getX() + index * slot).withWidth(slot).reduced(4, 0);
+            const bool active = index == shownClass;
+            g.setColour(active ? amber : panel);
+            g.fillRoundedRectangle(cell.toFloat(), 6.0f);
+            g.setColour(active ? juce::Colour(0xff1a140c) : muted);
+            g.setFont(juce::Font(juce::FontOptions(13.0f, active ? juce::Font::bold : juce::Font::plain)));
+            g.drawText(names[index], cell, juce::Justification::centred);
+        }
+    }
 }
 
 void Agc2AudioProcessorEditor::resized()
@@ -271,9 +291,12 @@ void Agc2AudioProcessorEditor::resized()
     subtitle.setBounds(header);
 
     area.removeFromTop(6);
+    classifierHeading.setBounds(area.removeFromTop(16));
+    classifierArea = area.removeFromTop(28);
+    area.removeFromTop(8);
     levelerHeading.setBounds(area.removeFromTop(16));
     auto levelerKnobs = area.removeFromTop(158);
-    const int levelerSlot = levelerKnobs.getWidth() / 7;
+    const int levelerSlot = levelerKnobs.getWidth() / 6;
 
     auto place = [](juce::Rectangle<int>& row, int slotWidth, juce::Label& name, juce::Slider& slider)
     {
@@ -287,7 +310,6 @@ void Agc2AudioProcessorEditor::resized()
     place(levelerKnobs, levelerSlot, cutName, maxCut);
     place(levelerKnobs, levelerSlot, floorName, noiseFloor);
     place(levelerKnobs, levelerSlot, duckName, duckAmount);
-    place(levelerKnobs, levelerSlot, speedName, speed);
     place(levelerKnobs, levelerSlot, lookaheadName, lookahead);
 
     area.removeFromTop(4);

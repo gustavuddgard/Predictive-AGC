@@ -1,25 +1,25 @@
 # AGC 2.0
 
-A stereo leveler for Logic Pro, with a predictive sidechain ducker on the same plug-in. The leveler adds 1.5 ms and the sidechain adds 1.0 ms, so Logic's delay compensation sees about 2.5 ms.
+A stereo leveler for Logic Pro, with a predictive sidechain ducker on the same plug-in. The main path is a slow leveler plus a 1 ms peak guard. The sidechain adds its own 1 ms, so Logic's delay compensation sees about 2 ms.
 
-The learned part is a logistic model. It sees the six level features plus the live knobs, and it is trained on every lookahead from 1.5 ms to 40 ms. It only decides when the leveler should engage. Duck at 0% and Max boost at 0 dB keep the gain at 0 dB. A cut is allowed only when the lookahead is long enough for the 15 ms attack to finish before that audio is heard, so a short hit is not pumped. The gain amount is a deterministic rider: target minus the measured peak, through a 6 dB knee, clamped by max boost and max cut. A 1.5 ms delay lets the 0.5 ms engage attack land before the audio is heard. While the latch is off, gain holds, so a steady phrase does not pump.
+The leveler splits the signal at the crossover (default 300 Hz) and again at 3.4 kHz, and rides each band on its own. Bass is not pulled down to lift the mids. Duck at 0% leaves a loud master where it is. A quiet passage can rise, up to the Max gain knob. Music will not boost past +6 dB even if that knob is higher. The peak guard looks one millisecond ahead and only turns down when the leveler would push a peak through −0.1 dBFS. It lets go on its own, so a cut from a burst does not stay on the next song.
 
-A pause under the noise floor freezes the envelope and the gain. The release filter does not lift room tone between words. At the default speed the release is 400 ms. Boost cannot exceed +6 dB.
+A classifier on the waveform picks the ballistics. Music holds an 800 ms release. Voice follows faster and freezes on a pause. Telephone rides only the middle band. A stresser — flat, jumpy, near full scale — freezes the slow leveler and lets the peak guard catch the bursts. Silence holds the leveler for about a breath, then eases it back to 0 dB, so a hole between two sources does not hand the next one a leftover cut.
 
-Downward moves are a duck, not a clamp. The default Duck of 40% removes only part of the overshoot, through a wide knee, and the cut itself takes about 15 ms. A transient gets through. Turning Duck up makes the rider firmer. At 100% it takes the whole step down to the cut limit.
-
-Speed does not slow the attack. That would miss the 1.5 ms window. Speed 50% is a 400 ms release, and faster still stops at 200 ms.
+The older logistic engage model is still in the tree. It is not on this signal path.
 
 ## Controls
 
 - **Target** — level to ride toward, default −18 dB.
-- **Max boost / Max cut** — gain limits. Boost is capped at +6 dB. Cut defaults to −24 dB.
-- **Noise floor** — pauses under this level hold the current gain. Default −42 dB.
-- **Duck** — how much of a loud peak is eased down. Default 40%.
-- **Speed** — release and hang. 50% is a 400 ms release.
-- **Lookahead** — delay on the main path, 1.5–40 ms, default 1.5 ms. The sidechain ducker adds its own 1 ms. At 40 ms a loud call can be eased down before it is heard.
-- **Link** — one detector and one gain for every channel.
-- **Bypass** — fades the leveler to 0 dB and keeps its delay.
+- **Max gain** — upward limit, 0 to +12 dB, default +6. Music stops at +6.
+- **Release** — base release, 100–1500 ms, default 500. Music uses at least 800 ms.
+- **VAD** — pauses under this level hold the leveler. Default −42 dB.
+- **Duck** — how much of a loud band is eased down. Default 0%, so a hot master is not pulled down.
+- **Lookahead** — peak-guard delay, 0.5–3 ms, default 1 ms. The sidechain ducker adds its own 1 ms.
+- **Link** — sidechain channels share one detector.
+- **Bypass** — fades the leveler to 0 dB and keeps the delay.
+
+The classifier row shows Silence, Music, Voice, Telephone, or Stresser. The peak lamp lights while the guard is actually reducing.
 
 The sidechain row ducks the main signal from a second track. In Logic, choose that track in the plug-in's sidechain menu. The sidechain is read with no delay. The main signal waits 1 ms, so the duck starts before the hit is heard. A Linkwitz-Riley split at 300 Hz leaves the bass alone and ducks the mids and highs. Depth is how far those highs fall. Threshold is the sidechain level that opens the duck. Release is how fast it lets go, default 300 ms. Sense is the noise floor: quieter sidechain audio cannot start a duck, and once the duck has returned to unity the gain holds.
 
@@ -29,11 +29,11 @@ The sidechain row ducks the main signal from a second track. In Logic, choose th
 - **Crossover** — bass stays below this frequency, default 300 Hz.
 - **Sense** — sidechain noise floor, default −45 dB.
 
-The gain meter is the current rider in decibels. The engage lamp follows the latch, with brightness from the model probability.
+The gain meter is the loudest band plus the peak guard, in decibels.
 
 ## Presets
 
-The plug-in menu has two factory presets. **Default** is the voice leveler. **Money for Nothing** is for a full-scale master such as the 1996 Brothers in Arms remaster, which already peaks at 0 dBFS. Its peak follower sits near −13 dB, so a −18 dB target ducks the riff and pumps on the snare. The preset puts the target at −6 dB, allows no boost, ducks 15% of only those hottest hits, and uses the slowest release. Sidechain depth is 0, so the highs are left alone. On that master the rider moves by less than 0.2 dB and the song stays at its own level.
+The plug-in menu has two factory presets. **Default** rides toward −18 dB with up to +6 dB of boost and no downward duck. **Money for Nothing** is for a full-scale master that already sits on 0 dBFS. Boost and duck are both 0, so the song is left at its own level. The peak guard still has 1 ms in case a later passage would clip. Sidechain depth is 0.
 
 ## Build
 
@@ -78,7 +78,7 @@ rm -rf "$HOME/Library/Caches/AudioUnitCache"
 auval -v aufx Ag20 AgcL
 ```
 
-Then open Logic's Settings → Plug-in Manager and reset or rescan. It is an audio effect under the manufacturer AGC, not a MIDI effect. The plug-in reports 1.5 ms of latency so Logic's delay compensation can line the track up. Validate it with:
+Then open Logic's Settings → Plug-in Manager and reset or rescan. It is an audio effect under the manufacturer AGC, not a MIDI effect. The plug-in reports about 2 ms of latency (1 ms peak guard plus 1 ms sidechain) so Logic's delay compensation can line the track up. Validate it with:
 
 ```bash
 auval -v aufx Ag20 AgcL

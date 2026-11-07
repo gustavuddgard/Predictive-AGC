@@ -37,7 +37,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout Agc2AudioProcessor::createPa
 
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID { "duck", 1 }, "Duck",
-        juce::NormalisableRange<float> { 0.0f, 1.0f, 0.01f }, 0.4f,
+        juce::NormalisableRange<float> { 0.0f, 1.0f, 0.01f }, 0.0f,
         juce::AudioParameterFloatAttributes()
             .withLabel("%")
             .withStringFromValueFunction([](float value, int)
@@ -117,16 +117,48 @@ juce::AudioProcessorValueTreeState::ParameterLayout Agc2AudioProcessor::createPa
     layout.add(std::make_unique<juce::AudioParameterBool>(
         juce::ParameterID { "bypass", 1 }, "Bypass", false));
 
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID { "targetLoudness", 1 }, "Target Loudness",
+        juce::NormalisableRange<float> { -30.0f, -6.0f, 0.1f }, -18.0f, decibelText()));
+
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID { "maxGainBoost", 1 }, "Max Gain Boost",
+        juce::NormalisableRange<float> { 0.0f, 12.0f, 0.1f }, 6.0f, decibelText()));
+
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID { "baseRelease", 1 }, "Base Release Time",
+        juce::NormalisableRange<float> { 100.0f, 1500.0f, 1.0f, 0.5f }, 500.0f,
+        juce::AudioParameterFloatAttributes()
+            .withLabel("ms")
+            .withStringFromValueFunction([](float value, int)
+            {
+                return juce::String(juce::roundToInt(value));
+            })));
+
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID { "peakLookahead", 1 }, "Look-Ahead Time",
+        juce::NormalisableRange<float> { 0.5f, 3.0f, 0.01f }, 1.0f,
+        juce::AudioParameterFloatAttributes()
+            .withLabel("ms")
+            .withStringFromValueFunction([](float value, int)
+            {
+                return juce::String(value, 2);
+            })));
+
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID { "classifierState", 1 }, "Classifier State",
+        juce::StringArray { "Silence", "Music", "Voice", "Telephone", "Stresser" }, 0));
+
     return layout;
 }
 
 void Agc2AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
     const int mainChannels = std::max(1, getMainBusNumInputChannels());
-    mAGC.setLookaheadMilliseconds(apvts.getRawParameterValue("lookahead")->load());
-    mAGC.prepare(sampleRate, mainChannels);
+    mLevel.setLookaheadMilliseconds(apvts.getRawParameterValue("peakLookahead")->load());
+    mLevel.prepare(sampleRate, mainChannels);
     mDucker.prepare(sampleRate, mainChannels);
-    setLatencySamples(mAGC.getLatencySamples() + mDucker.getLatencySamples());
+    setLatencySamples(mLevel.getLatencySamples() + mDucker.getLatencySamples());
     scratch.setSize(std::max(1, getTotalNumInputChannels()), std::max(1, samplesPerBlock), false, false, true);
 }
 
@@ -156,15 +188,14 @@ void Agc2AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mi
 {
     juce::ScopedNoDenormals noDenormals;
 
-    mAGC.setTargetDecibels(apvts.getRawParameterValue("target")->load());
-    mAGC.setMaxBoostDecibels(apvts.getRawParameterValue("maxBoost")->load());
-    mAGC.setMaxCutDecibels(apvts.getRawParameterValue("maxCut")->load());
-    mAGC.setVadThresholdDecibels(apvts.getRawParameterValue("vad")->load());
-    mAGC.setDuck(apvts.getRawParameterValue("duck")->load());
-    mAGC.setSpeed(apvts.getRawParameterValue("speed")->load());
-    mAGC.setLookaheadMilliseconds(apvts.getRawParameterValue("lookahead")->load());
-    mAGC.setLinked(apvts.getRawParameterValue("link")->load() >= 0.5f);
-    mAGC.setBypassed(apvts.getRawParameterValue("bypass")->load() >= 0.5f);
+    mLevel.setTargetDecibels(apvts.getRawParameterValue("targetLoudness")->load());
+    mLevel.setMaxBoostDecibels(apvts.getRawParameterValue("maxGainBoost")->load());
+    mLevel.setReleaseMilliseconds(apvts.getRawParameterValue("baseRelease")->load());
+    mLevel.setLookaheadMilliseconds(apvts.getRawParameterValue("peakLookahead")->load());
+    mLevel.setCrossoverFrequency(apvts.getRawParameterValue("crossover")->load());
+    mLevel.setDuck(apvts.getRawParameterValue("duck")->load());
+    mLevel.setVadThresholdDecibels(apvts.getRawParameterValue("vad")->load());
+    mLevel.setBypassed(apvts.getRawParameterValue("bypass")->load() >= 0.5f);
 
     mDucker.setDuckDepth(apvts.getRawParameterValue("duckDepth")->load());
     mDucker.setThresholdDecibels(apvts.getRawParameterValue("scThreshold")->load());
@@ -188,18 +219,30 @@ void Agc2AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mi
 
     if (mainBus.getNumChannels() > 0)
     {
-        mAGC.process(mainBus.getArrayOfWritePointers(), mainBus.getNumChannels(), mainBus.getNumSamples());
+        mLevel.process(mainBus.getArrayOfWritePointers(), mainBus.getNumChannels(), mainBus.getNumSamples());
         mDucker.process(mainBus.getArrayOfWritePointers(), mainBus.getNumChannels(),
                         sidechain, sidechainChannels, mainBus.getNumSamples());
     }
 
-    const int latency = mAGC.getLatencySamples() + mDucker.getLatencySamples();
+    const int latency = mLevel.getLatencySamples() + mDucker.getLatencySamples();
     if (latency != getLatencySamples())
         setLatencySamples(latency);
 
-    displayedGainDb.store(mAGC.getGainDecibels(), std::memory_order_relaxed);
-    displayedEngage.store(mAGC.getEngageProbability(), std::memory_order_relaxed);
-    displayedEngaged.store(mAGC.isEngaged(), std::memory_order_relaxed);
+    const int klass = static_cast<int>(mLevel.getClass());
+    displayedClass.store(klass, std::memory_order_relaxed);
+    if (klass != publishedClass)
+    {
+        publishedClass = klass;
+        if (auto* choice = dynamic_cast<juce::AudioParameterChoice*>(apvts.getParameter("classifierState")))
+        {
+            if (choice->getIndex() != klass)
+                choice->setValueNotifyingHost(choice->convertTo0to1(static_cast<float>(klass)));
+        }
+    }
+
+    displayedGainDb.store(mLevel.getGainDecibels(), std::memory_order_relaxed);
+    displayedEngage.store(mLevel.isLimiting() ? 1.0f : 0.0f, std::memory_order_relaxed);
+    displayedEngaged.store(mLevel.isLimiting(), std::memory_order_relaxed);
 }
 
 void Agc2AudioProcessor::processBlock(juce::AudioBuffer<double>& buffer, juce::MidiBuffer& midi)
@@ -243,6 +286,10 @@ struct Program
     float vad;
     float speed;
     float lookahead;
+    float targetLoudness;
+    float maxGainBoost;
+    float baseRelease;
+    float peakLookahead;
     float depth;
     float threshold;
     float release;
@@ -256,8 +303,8 @@ struct Program
 // the whole song. This program only trims hits that reach -6 dB, with no boost
 // and a slow release, so the riff is not ridden.
 const Program programs[] = {
-    { "Default", -18.0f, 6.0f, 24.0f, 0.40f, -42.0f, 0.50f, 1.5f, 0.50f, -24.0f, 300.0f, 300.0f, -45.0f, true },
-    { "Money for Nothing", -6.0f, 0.0f, 3.0f, 0.15f, -30.0f, 0.00f, 1.5f, 0.00f, 0.0f, 1000.0f, 300.0f, -20.0f, true },
+    { "Default", -18.0f, 6.0f, 24.0f, 0.00f, -42.0f, 0.50f, 1.5f, -18.0f, 6.0f, 500.0f, 1.0f, 0.50f, -24.0f, 300.0f, 300.0f, -45.0f, true },
+    { "Money for Nothing", -6.0f, 0.0f, 3.0f, 0.00f, -30.0f, 0.00f, 1.5f, -18.0f, 0.0f, 800.0f, 1.0f, 0.00f, 0.0f, 1000.0f, 300.0f, -20.0f, true },
 };
 } // namespace
 
@@ -307,6 +354,10 @@ void Agc2AudioProcessor::applyProgram(int index)
     setFloat("vad", program.vad);
     setFloat("speed", program.speed);
     setFloat("lookahead", program.lookahead);
+    setFloat("targetLoudness", program.targetLoudness);
+    setFloat("maxGainBoost", program.maxGainBoost);
+    setFloat("baseRelease", program.baseRelease);
+    setFloat("peakLookahead", program.peakLookahead);
     setFloat("duckDepth", program.depth);
     setFloat("scThreshold", program.threshold);
     setFloat("scRelease", program.release);

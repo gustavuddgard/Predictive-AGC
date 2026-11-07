@@ -27,13 +27,13 @@ private:
     juce::ComboBox presetBox;
     juce::Label levelerHeading;
     juce::Label sidechainHeading;
+    juce::Label classifierHeading;
 
     juce::Label targetName;
     juce::Label boostName;
     juce::Label cutName;
     juce::Label floorName;
     juce::Label duckName;
-    juce::Label speedName;
     juce::Label lookaheadName;
     juce::Label depthName;
     juce::Label thresholdName;
@@ -45,7 +45,6 @@ private:
     juce::Slider maxCut;
     juce::Slider noiseFloor;
     juce::Slider duckAmount;
-    juce::Slider speed;
     juce::Slider lookahead;
     juce::Slider depth;
     juce::Slider scThreshold;
@@ -61,7 +60,6 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> cutAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> floorAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> duckAttachment;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> speedAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lookaheadAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> depthAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> thresholdAttachment;
@@ -74,6 +72,8 @@ private:
     juce::Rectangle<int> meterArea;
     juce::Rectangle<int> lampArea;
     juce::Rectangle<int> lampLabelArea;
+    juce::Rectangle<int> classifierArea;
+    int shownClass = 0;
     float gainDb = 0.0f;
     float engageProbability = 0.0f;
     bool engaged = false;

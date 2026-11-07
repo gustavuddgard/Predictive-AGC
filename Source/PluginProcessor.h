@@ -1,7 +1,7 @@
 #pragma once
 
-#include "PredictiveAGC.h"
 #include "PredictiveDucker.h"
+#include "ProgramAdaptiveAGC.h"
 
 #include <atomic>
 
@@ -43,6 +43,7 @@ public:
     float getDisplayedGainDb() const noexcept { return displayedGainDb.load(std::memory_order_relaxed); }
     float getDisplayedEngage() const noexcept { return displayedEngage.load(std::memory_order_relaxed); }
     bool getDisplayedEngaged() const noexcept { return displayedEngaged.load(std::memory_order_relaxed); }
+    int getDisplayedClass() const noexcept { return displayedClass.load(std::memory_order_relaxed); }
 
     juce::AudioProcessorValueTreeState apvts;
 
@@ -51,13 +52,15 @@ private:
 
     void applyProgram(int index);
 
-    dsp::PredictiveAGC mAGC;
+    dsp::ProgramAdaptiveAGC mLevel;
     dsp::PredictiveDucker mDucker;
     juce::AudioBuffer<float> scratch;
     int currentProgram = 0;
     std::atomic<float> displayedGainDb { 0.0f };
     std::atomic<float> displayedEngage { 0.0f };
     std::atomic<bool> displayedEngaged { false };
+    std::atomic<int> displayedClass { 0 };
+    int publishedClass = -1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Agc2AudioProcessor)
 };

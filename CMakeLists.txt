@@ -8,7 +8,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(agc_dsp STATIC
     Source/PredictiveAGC.cpp
-    Source/PredictiveDucker.cpp)
+    Source/PredictiveDucker.cpp
+    Source/AudioClassifier.cpp
+    Source/ProgramAdaptiveAGC.cpp)
 target_include_directories(agc_dsp PUBLIC Source)
 target_compile_features(agc_dsp PUBLIC cxx_std_17)
 set_target_properties(agc_dsp PROPERTIES POSITION_INDEPENDENT_CODE ON)

@@ -1,6 +1,6 @@
 # AGC 2.0
 
-A stereo leveler for Logic Pro. Reported latency is **1.5 ms**, under a hard cap of 2 ms.
+A stereo leveler for Logic Pro, with a predictive sidechain ducker on the same plug-in. The leveler adds 1.5 ms and the sidechain adds 1.0 ms, so Logic's delay compensation sees about 2.5 ms.
 
 The learned part is a four-unit network with 33 stored weights. It only decides when the leveler should engage. The gain amount is a deterministic rider: target minus the measured peak, through a 6 dB knee, clamped by max boost and max cut. A 1.5 ms delay lets the 0.5 ms engage attack land before the audio is heard. While the latch is off, gain holds, so a steady phrase does not pump.
 
@@ -18,7 +18,15 @@ Speed does not slow the attack. That would miss the 1.5 ms window. Speed 50% is 
 - **Duck** — how much of a loud peak is eased down. Default 40%.
 - **Speed** — release and hang. 50% is a 400 ms release.
 - **Link** — one detector and one gain for every channel.
-- **Bypass** — fades gain to 0 dB and keeps the 1.5 ms delay, so latency does not jump.
+- **Bypass** — fades the leveler to 0 dB and keeps its delay.
+
+The sidechain row ducks the main signal from a second track. In Logic, choose that track in the plug-in's sidechain menu. The sidechain is read with no delay. The main signal waits 1 ms, so the duck starts before the hit is heard. A Linkwitz-Riley split at 300 Hz leaves the bass alone and ducks the mids and highs. Depth is how far those highs fall. Threshold is the sidechain level that opens the duck. Release is how fast it lets go, default 300 ms. Sense is the noise floor: quieter sidechain audio cannot start a duck, and once the duck has returned to unity the gain holds.
+
+- **Depth** — duck amount, 0–100%, default 50%.
+- **Threshold** — sidechain level that starts the duck, default −24 dB.
+- **Release** — 50–1000 ms, default 300 ms.
+- **Crossover** — bass stays below this frequency, default 300 Hz.
+- **Sense** — sidechain noise floor, default −45 dB.
 
 The gain meter is the current rider in decibels. The engage lamp follows the latch, with brightness from the model probability.
 

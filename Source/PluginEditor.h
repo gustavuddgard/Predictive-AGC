@@ -24,6 +24,8 @@ private:
     juce::Label title;
     juce::Label subtitle;
     juce::Label latencyReadout;
+    juce::Label levelerHeading;
+    juce::Label sidechainHeading;
 
     juce::Label targetName;
     juce::Label boostName;
@@ -31,12 +33,22 @@ private:
     juce::Label floorName;
     juce::Label duckName;
     juce::Label speedName;
+    juce::Label depthName;
+    juce::Label thresholdName;
+    juce::Label releaseName;
+    juce::Label crossoverName;
+    juce::Label senseName;
     juce::Slider target;
     juce::Slider maxBoost;
     juce::Slider maxCut;
     juce::Slider noiseFloor;
     juce::Slider duckAmount;
     juce::Slider speed;
+    juce::Slider depth;
+    juce::Slider scThreshold;
+    juce::Slider scRelease;
+    juce::Slider crossover;
+    juce::Slider sense;
 
     juce::TextButton link { "Link" };
     juce::TextButton bypass { "Bypass" };
@@ -47,6 +59,11 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> floorAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> duckAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> speedAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> depthAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> thresholdAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> releaseAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> crossoverAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> senseAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> linkAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAttachment;
 

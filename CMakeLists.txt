@@ -6,7 +6,9 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_library(agc_dsp STATIC Source/PredictiveAGC.cpp)
+add_library(agc_dsp STATIC
+    Source/PredictiveAGC.cpp
+    Source/PredictiveDucker.cpp)
 target_include_directories(agc_dsp PUBLIC Source)
 target_compile_features(agc_dsp PUBLIC cxx_std_17)
 set_target_properties(agc_dsp PROPERTIES POSITION_INDEPENDENT_CODE ON)

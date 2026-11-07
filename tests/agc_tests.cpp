@@ -1,4 +1,5 @@
 #include "PredictiveAGC.h"
+#include "PredictiveDucker.h"
 
 #include <cmath>
 #include <cstdlib>
@@ -248,6 +249,92 @@ void testLinkMovesBothChannels()
     check(rightDb > -27.0f && rightDb < -20.0f, "link ducks the quiet channel by the same gain, was " + std::to_string(rightDb));
 }
 
+std::vector<float> sine(double sampleRate, float db, float frequency, int samples)
+{
+    std::vector<float> buffer(static_cast<size_t>(samples), 0.0f);
+    const float amplitude = ampFromDb(db);
+    for (int i = 0; i < samples; ++i)
+    {
+        const double t = static_cast<double>(i) / sampleRate;
+        buffer[static_cast<size_t>(i)] = amplitude * static_cast<float>(std::sin(2.0 * M_PI * frequency * t));
+    }
+    return buffer;
+}
+
+void renderDucker(dsp::PredictiveDucker& ducker, std::vector<float>& main, const std::vector<float>& side, int block)
+{
+    const int total = static_cast<int>(main.size());
+    for (int offset = 0; offset < total;)
+    {
+        const int count = std::min(block, total - offset);
+        float* mainPointer = main.data() + offset;
+        const float* sidePointer = side.data() + offset;
+        float* mains[] = { mainPointer };
+        const float* sides[] = { sidePointer };
+        ducker.process(mains, 1, sides, 1, count);
+        offset += count;
+    }
+}
+
+void testDuckerLatency()
+{
+    dsp::PredictiveDucker ducker;
+    ducker.prepare(48000.0, 1);
+    check(ducker.getLatencySamples() == 48, "48 kHz lookahead is 48 samples, was " + std::to_string(ducker.getLatencySamples()));
+    const double ms = 1000.0 * static_cast<double>(ducker.getLatencySamples()) / 48000.0;
+    check(std::abs(ms - 1.0) < 0.02, "lookahead is 1 ms, was " + std::to_string(ms));
+}
+
+void testSidechainDucksHighsAndKeepsBass()
+{
+    constexpr double rate = 48000.0;
+    const int total = static_cast<int>(0.25 * rate);
+    const int measure = static_cast<int>(0.08 * rate);
+    auto side = sine(rate, 0.0f, 1000.0f, total);
+
+    dsp::PredictiveDucker lowDucker;
+    lowDucker.prepare(rate, 1);
+    lowDucker.setDuckDepth(1.0f);
+    lowDucker.setThresholdDecibels(-24.0f);
+    lowDucker.setVadThresholdDecibels(-50.0f);
+    lowDucker.setCrossoverFrequency(300.0f);
+    lowDucker.setReleaseMilliseconds(80.0f);
+    auto low = sine(rate, -12.0f, 80.0f, total);
+    renderDucker(lowDucker, low, side, 128);
+    const float lowOut = peakDb(low, total - measure, total);
+    check(lowOut > -15.0f && lowOut < -9.0f, "bass stays near the input under a full duck, was " + std::to_string(lowOut));
+
+    dsp::PredictiveDucker highDucker;
+    highDucker.prepare(rate, 1);
+    highDucker.setDuckDepth(1.0f);
+    highDucker.setThresholdDecibels(-24.0f);
+    highDucker.setVadThresholdDecibels(-50.0f);
+    highDucker.setCrossoverFrequency(300.0f);
+    highDucker.setReleaseMilliseconds(80.0f);
+    auto high = sine(rate, -12.0f, 4000.0f, total);
+    renderDucker(highDucker, high, side, 128);
+    const float highOut = peakDb(high, total - measure, total);
+    check(highOut < -28.0f, "highs are ducked by a hot sidechain, was " + std::to_string(highOut));
+}
+
+void testSidechainNoiseDoesNotDuck()
+{
+    constexpr double rate = 48000.0;
+    const int total = static_cast<int>(0.25 * rate);
+    const int measure = static_cast<int>(0.08 * rate);
+    dsp::PredictiveDucker ducker;
+    ducker.prepare(rate, 1);
+    ducker.setDuckDepth(1.0f);
+    ducker.setThresholdDecibels(-20.0f);
+    ducker.setVadThresholdDecibels(-40.0f);
+    ducker.setCrossoverFrequency(300.0f);
+    auto main = sine(rate, -12.0f, 4000.0f, total);
+    auto side = sine(rate, -55.0f, 1000.0f, total);
+    renderDucker(ducker, main, side, 64);
+    const float out = peakDb(main, total - measure, total);
+    check(out > -15.0f && out < -9.0f, "sidechain under the VAD leaves the highs alone, was " + std::to_string(out));
+}
+
 void testBlockSizeInvariance()
 {
     constexpr double rate = 48000.0;
@@ -294,6 +381,9 @@ int main()
     testBoostIsCappedAtSixDb();
     testLinkMovesBothChannels();
     testBlockSizeInvariance();
+    testDuckerLatency();
+    testSidechainDucksHighsAndKeepsBass();
+    testSidechainNoiseDoesNotDuck();
 
     if (failures != 0)
     {

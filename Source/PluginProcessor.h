@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PredictiveAGC.h"
+#include "PredictiveDucker.h"
 
 #include <atomic>
 
@@ -49,6 +50,7 @@ private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     dsp::PredictiveAGC mAGC;
+    dsp::PredictiveDucker mDucker;
     juce::AudioBuffer<float> scratch;
     std::atomic<float> displayedGainDb { 0.0f };
     std::atomic<float> displayedEngage { 0.0f };

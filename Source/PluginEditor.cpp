@@ -99,7 +99,7 @@ Agc2AudioProcessorEditor::Agc2AudioProcessorEditor(Agc2AudioProcessor& owner)
     subtitle.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(subtitle);
 
-    latencyReadout.setText("1.5 ms", juce::dontSendNotification);
+    latencyReadout.setText("2.5 ms", juce::dontSendNotification);
     latencyReadout.setFont(juce::Font(juce::FontOptions(16.0f, juce::Font::bold)));
     latencyReadout.setColour(juce::Label::textColourId, amber);
     latencyReadout.setJustificationType(juce::Justification::centredRight);
@@ -111,6 +111,21 @@ Agc2AudioProcessorEditor::Agc2AudioProcessorEditor(Agc2AudioProcessor& owner)
     configureKnob(noiseFloor, floorName, "Noise floor");
     configureKnob(duckAmount, duckName, "Duck");
     configureKnob(speed, speedName, "Speed");
+    configureKnob(depth, depthName, "Depth");
+    configureKnob(scThreshold, thresholdName, "Threshold");
+    configureKnob(scRelease, releaseName, "Release");
+    configureKnob(crossover, crossoverName, "Crossover");
+    configureKnob(sense, senseName, "Sense");
+
+    levelerHeading.setText("Leveler", juce::dontSendNotification);
+    levelerHeading.setFont(juce::Font(juce::FontOptions(13.0f, juce::Font::bold)));
+    levelerHeading.setColour(juce::Label::textColourId, amber);
+    addAndMakeVisible(levelerHeading);
+
+    sidechainHeading.setText("Sidechain", juce::dontSendNotification);
+    sidechainHeading.setFont(juce::Font(juce::FontOptions(13.0f, juce::Font::bold)));
+    sidechainHeading.setColour(juce::Label::textColourId, amber);
+    addAndMakeVisible(sidechainHeading);
 
     link.setClickingTogglesState(true);
     bypass.setClickingTogglesState(true);
@@ -124,13 +139,18 @@ Agc2AudioProcessorEditor::Agc2AudioProcessorEditor(Agc2AudioProcessor& owner)
     floorAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "vad", noiseFloor);
     duckAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "duck", duckAmount);
     speedAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "speed", speed);
+    depthAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "duckDepth", depth);
+    thresholdAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "scThreshold", scThreshold);
+    releaseAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "scRelease", scRelease);
+    crossoverAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "crossover", crossover);
+    senseAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "scVad", sense);
     linkAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(state, "link", link);
     bypassAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(state, "bypass", bypass);
 
     setOpaque(true);
     setResizable(true, true);
-    setResizeLimits(900, 360, 1200, 560);
-    setSize(980, 400);
+    setResizeLimits(900, 520, 1280, 820);
+    setSize(980, 620);
     startTimerHz(30);
 }
 
@@ -157,6 +177,13 @@ void Agc2AudioProcessorEditor::timerCallback()
     gainDb = agc().getDisplayedGainDb();
     engageProbability = agc().getDisplayedEngage();
     engaged = agc().getDisplayedEngaged();
+
+    const double rate = agc().getSampleRate();
+    if (rate > 0.0)
+    {
+        const double milliseconds = 1000.0 * static_cast<double>(agc().getLatencySamples()) / rate;
+        latencyReadout.setText(juce::String(milliseconds, 1) + " ms", juce::dontSendNotification);
+    }
     repaint();
 }
 
@@ -222,23 +249,34 @@ void Agc2AudioProcessorEditor::resized()
     title.setBounds(header.removeFromTop(28));
     subtitle.setBounds(header);
 
-    area.removeFromTop(10);
-    auto knobs = area.removeFromTop(176);
-    const int slotWidth = knobs.getWidth() / 6;
+    area.removeFromTop(6);
+    levelerHeading.setBounds(area.removeFromTop(16));
+    auto levelerKnobs = area.removeFromTop(158);
+    const int levelerSlot = levelerKnobs.getWidth() / 6;
 
-    auto place = [slotWidth](juce::Rectangle<int>& row, juce::Label& name, juce::Slider& slider)
+    auto place = [](juce::Rectangle<int>& row, int slotWidth, juce::Label& name, juce::Slider& slider)
     {
-        auto slot = row.removeFromLeft(slotWidth).reduced(6, 0);
-        name.setBounds(slot.removeFromTop(18));
+        auto slot = row.removeFromLeft(slotWidth).reduced(4, 0);
+        name.setBounds(slot.removeFromTop(16));
         slider.setBounds(slot);
     };
 
-    place(knobs, targetName, target);
-    place(knobs, boostName, maxBoost);
-    place(knobs, cutName, maxCut);
-    place(knobs, floorName, noiseFloor);
-    place(knobs, duckName, duckAmount);
-    place(knobs, speedName, speed);
+    place(levelerKnobs, levelerSlot, targetName, target);
+    place(levelerKnobs, levelerSlot, boostName, maxBoost);
+    place(levelerKnobs, levelerSlot, cutName, maxCut);
+    place(levelerKnobs, levelerSlot, floorName, noiseFloor);
+    place(levelerKnobs, levelerSlot, duckName, duckAmount);
+    place(levelerKnobs, levelerSlot, speedName, speed);
+
+    area.removeFromTop(4);
+    sidechainHeading.setBounds(area.removeFromTop(16));
+    auto sidechainKnobs = area.removeFromTop(158);
+    const int sidechainSlot = sidechainKnobs.getWidth() / 5;
+    place(sidechainKnobs, sidechainSlot, depthName, depth);
+    place(sidechainKnobs, sidechainSlot, thresholdName, scThreshold);
+    place(sidechainKnobs, sidechainSlot, releaseName, scRelease);
+    place(sidechainKnobs, sidechainSlot, crossoverName, crossover);
+    place(sidechainKnobs, sidechainSlot, senseName, sense);
 
     area.removeFromTop(8);
     auto footer = area;

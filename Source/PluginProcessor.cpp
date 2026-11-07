@@ -17,7 +17,8 @@ juce::AudioParameterFloatAttributes decibelText()
 Agc2AudioProcessor::Agc2AudioProcessor()
     : juce::AudioProcessor(BusesProperties()
                                .withInput("Input", juce::AudioChannelSet::stereo(), true)
-                               .withOutput("Output", juce::AudioChannelSet::stereo(), true))
+                               .withOutput("Output", juce::AudioChannelSet::stereo(), true)
+                               .withInput("Sidechain", juce::AudioChannelSet::stereo(), true))
     , apvts(*this, nullptr, "AGC2", createParameterLayout())
 {
 }
@@ -62,6 +63,44 @@ juce::AudioProcessorValueTreeState::ParameterLayout Agc2AudioProcessor::createPa
                 return juce::String(juce::roundToInt(value * 100.0f));
             })));
 
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID { "duckDepth", 1 }, "Depth",
+        juce::NormalisableRange<float> { 0.0f, 1.0f, 0.01f }, 0.5f,
+        juce::AudioParameterFloatAttributes()
+            .withLabel("%")
+            .withStringFromValueFunction([](float value, int)
+            {
+                return juce::String(juce::roundToInt(value * 100.0f));
+            })));
+
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID { "scThreshold", 1 }, "Threshold",
+        juce::NormalisableRange<float> { -60.0f, 0.0f, 0.1f }, -24.0f, decibelText()));
+
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID { "scRelease", 1 }, "Release",
+        juce::NormalisableRange<float> { 50.0f, 1000.0f, 1.0f, 0.5f }, 300.0f,
+        juce::AudioParameterFloatAttributes()
+            .withLabel("ms")
+            .withStringFromValueFunction([](float value, int)
+            {
+                return juce::String(juce::roundToInt(value));
+            })));
+
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID { "crossover", 1 }, "Crossover",
+        juce::NormalisableRange<float> { 100.0f, 1000.0f, 1.0f, 0.5f }, 300.0f,
+        juce::AudioParameterFloatAttributes()
+            .withLabel("Hz")
+            .withStringFromValueFunction([](float value, int)
+            {
+                return juce::String(juce::roundToInt(value));
+            })));
+
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID { "scVad", 1 }, "Sense",
+        juce::NormalisableRange<float> { -60.0f, -20.0f, 0.1f }, -45.0f, decibelText()));
+
     layout.add(std::make_unique<juce::AudioParameterBool>(
         juce::ParameterID { "link", 1 }, "Link", true));
 
@@ -73,9 +112,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout Agc2AudioProcessor::createPa
 
 void Agc2AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
-    mAGC.prepare(sampleRate, getTotalNumInputChannels());
-    setLatencySamples(mAGC.getLatencySamples());
-    scratch.setSize(std::max(1, getTotalNumOutputChannels()), std::max(1, samplesPerBlock), false, false, true);
+    const int mainChannels = std::max(1, getMainBusNumInputChannels());
+    mAGC.prepare(sampleRate, mainChannels);
+    mDucker.prepare(sampleRate, mainChannels);
+    setLatencySamples(mAGC.getLatencySamples() + mDucker.getLatencySamples());
+    scratch.setSize(std::max(1, getTotalNumInputChannels()), std::max(1, samplesPerBlock), false, false, true);
 }
 
 void Agc2AudioProcessor::releaseResources() {}
@@ -88,7 +129,16 @@ bool Agc2AudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) cons
     if (input != output)
         return false;
 
-    return input == juce::AudioChannelSet::mono() || input == juce::AudioChannelSet::stereo();
+    if (input != juce::AudioChannelSet::mono() && input != juce::AudioChannelSet::stereo())
+        return false;
+
+    if (layouts.inputBuses.size() < 2)
+        return true;
+
+    const auto sidechain = layouts.getChannelSet(true, 1);
+    return sidechain.isDisabled()
+        || sidechain == juce::AudioChannelSet::mono()
+        || sidechain == juce::AudioChannelSet::stereo();
 }
 
 void Agc2AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -104,10 +154,32 @@ void Agc2AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mi
     mAGC.setLinked(apvts.getRawParameterValue("link")->load() >= 0.5f);
     mAGC.setBypassed(apvts.getRawParameterValue("bypass")->load() >= 0.5f);
 
+    mDucker.setDuckDepth(apvts.getRawParameterValue("duckDepth")->load());
+    mDucker.setThresholdDecibels(apvts.getRawParameterValue("scThreshold")->load());
+    mDucker.setReleaseMilliseconds(apvts.getRawParameterValue("scRelease")->load());
+    mDucker.setCrossoverFrequency(apvts.getRawParameterValue("crossover")->load());
+    mDucker.setVadThresholdDecibels(apvts.getRawParameterValue("scVad")->load());
+
     for (int channel = getTotalNumInputChannels(); channel < getTotalNumOutputChannels(); ++channel)
         buffer.clear(channel, 0, buffer.getNumSamples());
 
-    mAGC.process(buffer.getArrayOfWritePointers(), buffer.getNumChannels(), buffer.getNumSamples());
+    auto mainBus = getBusBuffer(buffer, true, 0);
+    const float* const* sidechain = nullptr;
+    int sidechainChannels = 0;
+    juce::AudioBuffer<float> sideBus;
+    if (getBusCount(true) > 1)
+    {
+        sideBus = getBusBuffer(buffer, true, 1);
+        sidechainChannels = sideBus.getNumChannels();
+        sidechain = sideBus.getArrayOfReadPointers();
+    }
+
+    if (mainBus.getNumChannels() > 0)
+    {
+        mAGC.process(mainBus.getArrayOfWritePointers(), mainBus.getNumChannels(), mainBus.getNumSamples());
+        mDucker.process(mainBus.getArrayOfWritePointers(), mainBus.getNumChannels(),
+                        sidechain, sidechainChannels, mainBus.getNumSamples());
+    }
 
     displayedGainDb.store(mAGC.getGainDecibels(), std::memory_order_relaxed);
     displayedEngage.store(mAGC.getEngageProbability(), std::memory_order_relaxed);

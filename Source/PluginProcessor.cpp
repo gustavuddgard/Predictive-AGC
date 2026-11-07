@@ -35,6 +35,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout Agc2AudioProcessor::createPa
         juce::NormalisableRange<float> { 0.0f, 6.0f, 0.1f }, 6.0f, decibelText()));
 
     layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID { "duck", 1 }, "Duck",
+        juce::NormalisableRange<float> { 0.0f, 1.0f, 0.01f }, 0.4f,
+        juce::AudioParameterFloatAttributes()
+            .withLabel("%")
+            .withStringFromValueFunction([](float value, int)
+            {
+                return juce::String(juce::roundToInt(value * 100.0f));
+            })));
+
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID { "vad", 1 }, "Noise floor",
         juce::NormalisableRange<float> { -60.0f, -24.0f, 0.1f }, -42.0f, decibelText()));
 
@@ -89,6 +99,7 @@ void Agc2AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mi
     mAGC.setMaxBoostDecibels(apvts.getRawParameterValue("maxBoost")->load());
     mAGC.setMaxCutDecibels(apvts.getRawParameterValue("maxCut")->load());
     mAGC.setVadThresholdDecibels(apvts.getRawParameterValue("vad")->load());
+    mAGC.setDuck(apvts.getRawParameterValue("duck")->load());
     mAGC.setSpeed(apvts.getRawParameterValue("speed")->load());
     mAGC.setLinked(apvts.getRawParameterValue("link")->load() >= 0.5f);
     mAGC.setBypassed(apvts.getRawParameterValue("bypass")->load() >= 0.5f);

@@ -109,6 +109,7 @@ Agc2AudioProcessorEditor::Agc2AudioProcessorEditor(Agc2AudioProcessor& owner)
     configureKnob(maxBoost, boostName, "Max boost");
     configureKnob(maxCut, cutName, "Max cut");
     configureKnob(noiseFloor, floorName, "Noise floor");
+    configureKnob(duckAmount, duckName, "Duck");
     configureKnob(speed, speedName, "Speed");
 
     link.setClickingTogglesState(true);
@@ -121,14 +122,15 @@ Agc2AudioProcessorEditor::Agc2AudioProcessorEditor(Agc2AudioProcessor& owner)
     boostAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "maxBoost", maxBoost);
     cutAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "maxCut", maxCut);
     floorAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "vad", noiseFloor);
+    duckAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "duck", duckAmount);
     speedAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "speed", speed);
     linkAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(state, "link", link);
     bypassAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(state, "bypass", bypass);
 
     setOpaque(true);
     setResizable(true, true);
-    setResizeLimits(780, 360, 1100, 560);
-    setSize(860, 400);
+    setResizeLimits(900, 360, 1200, 560);
+    setSize(980, 400);
     startTimerHz(30);
 }
 
@@ -222,7 +224,7 @@ void Agc2AudioProcessorEditor::resized()
 
     area.removeFromTop(10);
     auto knobs = area.removeFromTop(176);
-    const int slotWidth = knobs.getWidth() / 5;
+    const int slotWidth = knobs.getWidth() / 6;
 
     auto place = [slotWidth](juce::Rectangle<int>& row, juce::Label& name, juce::Slider& slider)
     {
@@ -235,6 +237,7 @@ void Agc2AudioProcessorEditor::resized()
     place(knobs, boostName, maxBoost);
     place(knobs, cutName, maxCut);
     place(knobs, floorName, noiseFloor);
+    place(knobs, duckName, duckAmount);
     place(knobs, speedName, speed);
 
     area.removeFromTop(8);

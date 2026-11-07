@@ -89,7 +89,7 @@ void PredictiveAGC::updateCoefficients()
     rmsCoef = timeCoef(0.005, sampleRate);
     slopeCoef = timeCoef(0.0005, sampleRate);
     accelCoef = timeCoef(0.0005, sampleRate);
-    attackCoef = timeCoef(0.0005, sampleRate);
+    attackCoef = timeCoef(0.015, sampleRate);
     releaseCoef = timeCoef(static_cast<double>(releaseMs) * 0.001, sampleRate);
     bypassCoef = timeCoef(0.005, sampleRate);
     hangSamples = static_cast<int>(std::llround(hangMs * 0.001 * sampleRate));
@@ -124,6 +124,11 @@ void PredictiveAGC::setMaxBoostDecibels(float db)
 void PredictiveAGC::setVadThresholdDecibels(float db)
 {
     vadThresholdDb = std::clamp(db, -80.0f, 0.0f);
+}
+
+void PredictiveAGC::setDuck(float amount)
+{
+    duck = std::clamp(amount, 0.0f, 1.0f);
 }
 
 void PredictiveAGC::setMaxCutDecibels(float db) { maxCutDb = std::max(0.0f, db); }
@@ -228,6 +233,23 @@ void PredictiveAGC::updateDetector(Channel& channel, float magnitude)
     ++channel.sampleCount;
 }
 
+double PredictiveAGC::desiredGain(double levelDb) const
+{
+    const double over = levelDb - static_cast<double>(targetDb);
+    if (over > 0.0)
+    {
+        // Wide knee, then only `duck` of the overshoot. 40% of a loud step is
+        // a few dB, not a clamp onto the target.
+        constexpr double duckKnee = 12.0;
+        const double shaped = over < duckKnee ? (over * over / duckKnee) : over;
+        return std::max(-shaped * static_cast<double>(duck), -static_cast<double>(maxCutDb));
+    }
+
+    const double need = -over;
+    const double shaped = need < kneeDb ? need * (need / kneeDb) : need;
+    return std::min(shaped, static_cast<double>(maxBoostDb));
+}
+
 void PredictiveAGC::updateGain(Channel& channel)
 {
     double desired = channel.gainDb;
@@ -255,13 +277,7 @@ void PredictiveAGC::updateGain(Channel& channel)
     }
     else
     {
-        const double raw = static_cast<double>(targetDb) - channel.levelDb;
-        const double magnitude = std::abs(raw);
-        double correction = (magnitude < kneeDb) ? raw * (magnitude / kneeDb) : raw;
-        correction = std::clamp(correction,
-                                 -static_cast<double>(maxCutDb),
-                                 static_cast<double>(maxBoostDb));
-        desired = correction;
+        desired = desiredGain(channel.levelDb);
 
         if (desired < channel.gainDb - 0.05)
         {

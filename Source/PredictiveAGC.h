@@ -16,6 +16,7 @@ public:
     void setMaxBoostDecibels(float db);
     void setMaxCutDecibels(float db);
     void setVadThresholdDecibels(float db);
+    void setDuck(float amount);
     void setSpeed(float normalised);
     void setLinked(bool shouldLink);
     void setBypassed(bool shouldBypass);
@@ -53,6 +54,7 @@ private:
     void updateCoefficients();
     void updateDetector(Channel& channel, float magnitude);
     void updateGain(Channel& channel);
+    double desiredGain(double levelDb) const;
     float readDelay(Channel& channel, float input);
 
     static double timeCoef(double seconds, double sampleRate);
@@ -63,6 +65,7 @@ private:
     float maxBoostDb = 6.0f;
     float maxCutDb = 24.0f;
     float vadThresholdDb = -42.0f;
+    float duck = 0.4f;
     float speed = 0.5f;
     bool linked = true;
     bool bypassed = false;

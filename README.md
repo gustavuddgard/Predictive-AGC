@@ -6,6 +6,8 @@ The learned part is a four-unit network with 33 stored weights. It only decides 
 
 A pause under the noise floor freezes the envelope and the gain. The release filter does not lift room tone between words. At the default speed the release is 400 ms. Boost cannot exceed +6 dB.
 
+Downward moves are a duck, not a clamp. The default Duck of 40% removes only part of the overshoot, through a wide knee, and the cut itself takes about 15 ms. A transient gets through. Turning Duck up makes the rider firmer. At 100% it takes the whole step down to the cut limit.
+
 Speed does not slow the attack. That would miss the 1.5 ms window. Speed 50% is a 400 ms release, and faster still stops at 200 ms.
 
 ## Controls
@@ -13,6 +15,7 @@ Speed does not slow the attack. That would miss the 1.5 ms window. Speed 50% is 
 - **Target** — level to ride toward, default −18 dB.
 - **Max boost / Max cut** — gain limits. Boost is capped at +6 dB. Cut defaults to −24 dB.
 - **Noise floor** — pauses under this level hold the current gain. Default −42 dB.
+- **Duck** — how much of a loud peak is eased down. Default 40%.
 - **Speed** — release and hang. 50% is a 400 ms release.
 - **Link** — one detector and one gain for every channel.
 - **Bypass** — fades gain to 0 dB and keeps the 1.5 ms delay, so latency does not jump.

@@ -153,9 +153,11 @@ void testStepIsCaughtInsideTheDelay()
     const int window = 64;
     const float inPeak = peakDb(dry, hold, hold + window);
     const float outPeak = peakDb(wet, hold + latency, hold + latency + window);
-    check(outPeak < inPeak - 6.0f,
-          "loud samples leave the delay pulled down (in " + std::to_string(inPeak)
-              + " dB, out " + std::to_string(outPeak) + " dB)");
+    check(outPeak > inPeak - 3.0f,
+          "the transient is not slammed, in " + std::to_string(inPeak)
+              + " dB, out " + std::to_string(outPeak) + " dB");
+    check(agc.getGainDecibels() < -3.0f && agc.getGainDecibels() > -8.0f,
+          "the step settles into a partial duck, gain " + std::to_string(agc.getGainDecibels()));
 }
 
 void testPauseHoldsGain()
@@ -168,7 +170,7 @@ void testPauseHoldsGain()
     auto hot = tone(rate, -6.0f, hotSamples);
     render(agc, hot, 64);
     const float held = agc.getGainDecibels();
-    check(held < -6.0f, "hot signal engages a real cut, gain " + std::to_string(held));
+    check(held < -3.0f && held > -8.0f, "hot signal settles into a partial duck, gain " + std::to_string(held));
     check(agc.isEngaged(), "hot signal is latched");
 
     const int silentSamples = static_cast<int>(rate);
@@ -242,8 +244,8 @@ void testLinkMovesBothChannels()
     const int start = static_cast<int>(0.12 * rate);
     const float leftDb = peakDb(left, start, total);
     const float rightDb = peakDb(right, start, total);
-    check(leftDb > -21.0f && leftDb < -15.0f, "linked hot channel settles near the target, was " + std::to_string(leftDb));
-    check(rightDb > -34.0f && rightDb < -26.0f, "link ducks the quiet channel too, was " + std::to_string(rightDb));
+    check(leftDb > -14.0f && leftDb < -8.0f, "linked hot channel is ducked part way, was " + std::to_string(leftDb));
+    check(rightDb > -27.0f && rightDb < -20.0f, "link ducks the quiet channel by the same gain, was " + std::to_string(rightDb));
 }
 
 void testBlockSizeInvariance()

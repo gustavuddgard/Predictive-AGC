@@ -29,11 +29,13 @@ private:
     juce::Label boostName;
     juce::Label cutName;
     juce::Label floorName;
+    juce::Label duckName;
     juce::Label speedName;
     juce::Slider target;
     juce::Slider maxBoost;
     juce::Slider maxCut;
     juce::Slider noiseFloor;
+    juce::Slider duckAmount;
     juce::Slider speed;
 
     juce::TextButton link { "Link" };
@@ -43,6 +45,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> boostAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> cutAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> floorAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> duckAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> speedAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> linkAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAttachment;

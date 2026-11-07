@@ -13,17 +13,17 @@ enum class EngageModelKind
 // for the four-unit hidden layer. Inference is a dot product, not a runtime.
 struct EngageWeights
 {
-    static constexpr EngageModelKind kind = EngageModelKind::mlp;
+    static constexpr EngageModelKind kind = EngageModelKind::logistic;
     static constexpr int inputCount = 6;
     static constexpr int hiddenCount = 4;
 
-    static constexpr float logisticW[inputCount] = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
-    static constexpr float logisticB = 0.0f;
+    static constexpr float logisticW[inputCount] = { 5.80620145f, 0.25862628f, 0.20847212f, 1.01459102f, 4.42525659f, 5.35710972f };
+    static constexpr float logisticB = -3.25445544f;
 
-    static constexpr float mlpW1[hiddenCount * inputCount] = { 4.00590808f, 0.46273063f, 0.41411423f, 0.07539008f, -0.33434086f, 1.13434411f, -3.71960879f, -0.03205328f, 0.25771200f, -0.10055985f, -0.33814292f, -0.69053717f, 0.37450804f, -0.04924764f, -0.13213266f, 0.40207854f, 0.81649907f, 0.05246269f, -0.57969036f, 0.23762318f, -0.30063985f, -0.94777139f, -1.49364467f, -0.35047610f };
-    static constexpr float mlpB1[hiddenCount] = { -0.23061759f, -0.86309176f, 0.31065800f, -1.06013613f };
-    static constexpr float mlpW2[hiddenCount] = { 3.54891576f, 3.27944260f, 1.11762991f, -2.53286691f };
-    static constexpr float mlpB2 = -0.12382893f;
+    static constexpr float mlpW1[hiddenCount * inputCount] = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+    static constexpr float mlpB1[hiddenCount] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    static constexpr float mlpW2[hiddenCount] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    static constexpr float mlpB2 = 0.0f;
 };
 
 } // namespace dsp

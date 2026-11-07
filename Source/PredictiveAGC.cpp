@@ -212,7 +212,7 @@ void PredictiveAGC::updateDetector(Channel& channel, float magnitude)
     if ((channel.sampleCount % inferInterval) == 0)
     {
         const float features[6] = {
-            clampedFeature(levelDb - static_cast<double>(targetDb), 24.0),
+            clampedFeature(std::abs(levelDb - static_cast<double>(targetDb)), 24.0),
             clampedFeature(channel.slope, 20.0),
             clampedFeature(channel.acceleration, 50.0),
             clampedFeature(peakDb - rmsDb, 12.0),

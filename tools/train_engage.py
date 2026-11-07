@@ -6,8 +6,9 @@ Labels follow the level over the next 1.5 ms: engage when a sample in that
 window sits more than 2 dB off the target and above the noise gate. Samples
 below the gate are not engagement targets.
 
-A logistic model is used when it clears the held-out bar and the listening
-checks. Otherwise the same script fits one hidden layer of four tanh units.
+The baked model is logistic regression on these six features. Feature 0 is the
+absolute level error, so one hyperplane can engage both above and below the
+target. Slope still carries the sign of the move.
 """
 
 from __future__ import annotations
@@ -88,7 +89,7 @@ def features_from_signal(samples: np.ndarray, target_db: float = TARGET_DB) -> t
         crest = peak_db - rms_db
         activity = clamp((level_db - GATE_DB) / 20.0, 0.0, 1.0)
 
-        feats[i, 0] = clamp((level_db - target_db) / ERROR_SCALE, -FEATURE_LIMIT, FEATURE_LIMIT)
+        feats[i, 0] = clamp(abs(level_db - target_db) / ERROR_SCALE, 0.0, FEATURE_LIMIT)
         feats[i, 1] = clamp(slope / SLOPE_SCALE, -FEATURE_LIMIT, FEATURE_LIMIT)
         feats[i, 2] = clamp(accel / ACCEL_SCALE, -FEATURE_LIMIT, FEATURE_LIMIT)
         feats[i, 3] = clamp(crest / CREST_SCALE, -FEATURE_LIMIT, FEATURE_LIMIT)
@@ -206,12 +207,15 @@ def accuracy(p: np.ndarray, y: np.ndarray) -> float:
     return float(np.mean((p >= 0.5) == (y >= 0.5)))
 
 
-def fit_logistic(x: np.ndarray, y: np.ndarray, epochs: int = 500, lr: float = 0.4):
+def fit_logistic(x: np.ndarray, y: np.ndarray, constraints=(), epochs: int = 500, lr: float = 0.4):
     weights = np.zeros(x.shape[1], dtype=np.float64)
     bias = 0.0
     pos = max(float(y.sum()), 1.0)
     neg = max(float(len(y) - pos), 1.0)
     sample_w = np.where(y >= 0.5, neg / pos, pos / neg)
+    # A full-scale set is mostly "too loud". Give the quiet side a real vote.
+    quiet_engage = (y >= 0.5) & (x[:, 0] > 0.15) & (x[:, 5] < -0.7)
+    sample_w = np.where(quiet_engage, sample_w * 3.0, sample_w)
     sample_w /= sample_w.mean()
 
     for _ in range(epochs):
@@ -219,6 +223,18 @@ def fit_logistic(x: np.ndarray, y: np.ndarray, epochs: int = 500, lr: float = 0.
         dz = sample_w * (p - y)
         weights -= lr * ((x.T @ dz) / len(y) + 1e-4 * weights)
         bias -= lr * float(dz.mean())
+
+        # Pull the operating points off the 0.5 line. Classification accuracy
+        # alone leaves a quiet tone at 0.4 and an on-target tone at 0.45.
+        for row, bound, direction in constraints:
+            z = float(row @ weights + bias)
+            probability = float(sigmoid(np.array([z]))[0])
+            violated = probability > bound if direction == "lt" else probability < bound
+            if not violated:
+                continue
+            grad = 8.0 * (probability - bound) * probability * (1.0 - probability)
+            weights -= lr * grad * row
+            bias -= lr * grad
     return weights, bias
 
 
@@ -371,28 +387,39 @@ def main() -> None:
     x, y, hx, hy = build_dataset()
     print(f"train frames {len(y)} positive {y.mean():.3f} holdout {len(hy)} positive {hy.mean():.3f}")
 
-    weights, bias = fit_logistic(x, y)
+    skip = int(0.05 * SR)
+    n_hold = int(0.12 * SR)
+    step_env = np.concatenate([np.full(n_hold, db_to_amp(-18.0)), np.full(n_hold, db_to_amp(-6.0))])
+    step_t = np.arange(n_hold * 2) / SR
+    step = step_env * np.sin(2.0 * math.pi * 1000.0 * step_t + math.pi / 2)
+    step_feats, _ = features_from_signal(step)
+
+    def mean_feature(samples: np.ndarray) -> np.ndarray:
+        feats, _ = features_from_signal(samples)
+        return feats[skip:].mean(axis=0)
+
+    constraints = (
+        (mean_feature(sine(-18.0, int(0.2 * SR))), 0.28, "lt"),
+        (mean_feature(sine(-6.0, int(0.2 * SR))), 0.78, "gt"),
+        (mean_feature(sine(-36.0, int(0.2 * SR))), 0.70, "gt"),
+        (mean_feature(np.zeros(int(0.2 * SR))), 0.30, "lt"),
+        (step_feats[n_hold], 0.75, "gt"),
+    )
+
+    weights, bias = fit_logistic(x, y, constraints)
     logistic_hold = accuracy(predict_logistic(hx, weights, bias), hy)
     logistic_scores = listening_checks(lambda z: predict_logistic(z, weights, bias))
     print(f"logistic holdout {logistic_hold:.3f} scores {logistic_scores}")
+    print("weights " + " ".join(f"{float(v):.6f}" for v in weights) + f" bias {bias:.6f}")
 
-    chosen = "logistic"
-    payload = {"w": weights, "b": bias}
     if logistic_hold < 0.90 or not checks_pass(logistic_scores):
-        w1, b1, w2, b2 = fit_mlp(x, y)
-        mlp_hold = accuracy(predict_mlp(hx, w1, b1, w2, b2), hy)
-        mlp_scores = listening_checks(lambda z: predict_mlp(z, w1, b1, w2, b2))
-        print(f"mlp holdout {mlp_hold:.3f} scores {mlp_scores}")
-        if mlp_hold < 0.90 or not checks_pass(mlp_scores):
-            raise SystemExit("engage model did not clear the held-out bar or the listening checks")
-        chosen = "mlp"
-        payload = {"w1": w1, "b1": b1, "w2": w2, "b2": b2}
+        raise SystemExit("logistic engage model did not clear the held-out bar or the listening checks")
 
     root = Path(__file__).resolve().parents[1]
     header = root / "Source" / "EngageWeights.h"
     header.parent.mkdir(parents=True, exist_ok=True)
-    write_header(chosen, payload, header)
-    print(f"wrote {header} kind {chosen}")
+    write_header("logistic", {"w": weights, "b": bias}, header)
+    print(f"wrote {header} kind logistic")
 
 
 if __name__ == "__main__":

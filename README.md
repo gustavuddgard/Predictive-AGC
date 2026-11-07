@@ -2,7 +2,7 @@
 
 A stereo leveler for Logic Pro, with a predictive sidechain ducker on the same plug-in. The leveler adds 1.5 ms and the sidechain adds 1.0 ms, so Logic's delay compensation sees about 2.5 ms.
 
-The learned part is a four-unit network with 33 stored weights. It only decides when the leveler should engage. The gain amount is a deterministic rider: target minus the measured peak, through a 6 dB knee, clamped by max boost and max cut. A 1.5 ms delay lets the 0.5 ms engage attack land before the audio is heard. While the latch is off, gain holds, so a steady phrase does not pump.
+The learned part is a six-feature logistic model with seven stored weights. It only decides when the leveler should engage. The first feature is how far the level sits from the target, in either direction, looked at over the next 1.5 ms. The gain amount is a deterministic rider: target minus the measured peak, through a 6 dB knee, clamped by max boost and max cut. A 1.5 ms delay lets the 0.5 ms engage attack land before the audio is heard. While the latch is off, gain holds, so a steady phrase does not pump.
 
 A pause under the noise floor freezes the envelope and the gain. The release filter does not lift room tone between words. At the default speed the release is 400 ms. Boost cannot exceed +6 dB.
 

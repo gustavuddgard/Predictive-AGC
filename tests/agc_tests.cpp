@@ -495,7 +495,7 @@ void testAdaptiveLoudToneStaysPut()
     const int total = static_cast<int>(rate);
     std::vector<float> buffer(static_cast<size_t>(total));
     for (int i = 0; i < total; ++i)
-        buffer[static_cast<size_t>(i)] = ampFromDb(-6.0f) * static_cast<float>(std::sin(2.0 * M_PI * 100.0 * i / rate));
+        buffer[static_cast<size_t>(i)] = ampFromDb(-6.0f) * static_cast<float>(std::sin(2.0 * M_PI * 60.0 * i / rate));
     const float inPeak = peakDb(buffer, total / 2, total);
     renderAdaptive(agc, buffer, 128);
     const float outPeak = peakDb(buffer, total / 2, total);
@@ -516,11 +516,11 @@ void testAdaptiveBoostsAQuietTone()
     const int total = static_cast<int>(rate * 2.5);
     std::vector<float> buffer(static_cast<size_t>(total));
     for (int i = 0; i < total; ++i)
-        buffer[static_cast<size_t>(i)] = ampFromDb(-36.0f) * static_cast<float>(std::sin(2.0 * M_PI * 100.0 * i / rate));
+        buffer[static_cast<size_t>(i)] = ampFromDb(-36.0f) * static_cast<float>(std::sin(2.0 * M_PI * 60.0 * i / rate));
     renderAdaptive(agc, buffer, 256);
     const float outPeak = peakDb(buffer, total - 8000, total);
     check(outPeak > -31.5f && outPeak < -29.2f,
-          "quiet 100 Hz tone settles near +6 dB, out " + std::to_string(outPeak));
+          "quiet low tone settles near +6 dB, out " + std::to_string(outPeak));
     check(agc.getGainDecibels() <= 6.2f, "boost stays at the cap, gain " + std::to_string(agc.getGainDecibels()));
 }
 
@@ -537,9 +537,9 @@ void testAdaptivePeakGuardAndGap()
     const int gap = static_cast<int>(rate * 1.0);
     std::vector<float> buffer(static_cast<size_t>(quiet + burst + gap), 0.0f);
     for (int i = 0; i < quiet; ++i)
-        buffer[static_cast<size_t>(i)] = ampFromDb(-36.0f) * static_cast<float>(std::sin(2.0 * M_PI * 100.0 * i / rate));
+        buffer[static_cast<size_t>(i)] = ampFromDb(-36.0f) * static_cast<float>(std::sin(2.0 * M_PI * 60.0 * i / rate));
     for (int i = 0; i < burst; ++i)
-        buffer[static_cast<size_t>(quiet + i)] = std::sin(2.0 * M_PI * 1000.0 * i / rate);
+        buffer[static_cast<size_t>(quiet + i)] = std::sin(2.0 * M_PI * 60.0 * i / rate);
 
     float worst = 0.0f;
     for (int offset = 0; offset < quiet + burst + gap;)
@@ -563,17 +563,47 @@ void testAdaptivePeakGuardAndGap()
 
 void testAdaptiveNoiseIsStresser()
 {
-    dsp::AudioClassifier classifier;
-    classifier.prepare(48000.0);
+    dsp::AudioClassifier continuous;
+    continuous.prepare(48000.0);
     std::uint32_t state = 1;
-    dsp::AudioClass last = dsp::AudioClass::silence;
-    for (int i = 0; i < 24000; ++i)
+    dsp::AudioClass steady = dsp::AudioClass::silence;
+    for (int i = 0; i < 48000; ++i)
     {
         state = state * 1664525u + 1013904223u;
         const float sample = (static_cast<float>(state >> 8) / 16777216.0f) * 2.0f - 1.0f;
-        last = classifier.process(sample * 0.5f);
+        steady = continuous.process(sample * 0.5f);
     }
-    check(last == dsp::AudioClass::stresser, "broadband noise classifies as stresser");
+    check(steady != dsp::AudioClass::stresser, "continuous noise is not a stresser");
+
+    dsp::AudioClassifier gated;
+    gated.prepare(48000.0);
+    const int period = 9600;
+    dsp::AudioClass duringBurst = dsp::AudioClass::silence;
+    for (int i = 0; i < 48000 * 2; ++i)
+    {
+        state = state * 1664525u + 1013904223u;
+        const float sample = (static_cast<float>(state >> 8) / 16777216.0f) * 2.0f - 1.0f;
+        const bool on = (i % (period * 2)) < period;
+        const dsp::AudioClass klass = gated.process(on ? sample * 0.8f : 0.0f);
+        const int into = i % (period * 2);
+        if (i > 48000 && into > 5000 && into < 7000)
+            duringBurst = klass;
+    }
+    check(duringBurst == dsp::AudioClass::stresser, "noise with holes classifies as stresser");
+
+    dsp::AudioClassifier mix;
+    mix.prepare(48000.0);
+    dsp::AudioClass song = dsp::AudioClass::silence;
+    for (int i = 0; i < 48000; ++i)
+    {
+        const double t = static_cast<double>(i) / 48000.0;
+        const float sample = 0.35f * static_cast<float>(std::sin(2.0 * M_PI * 80.0 * t))
+            + 0.28f * static_cast<float>(std::sin(2.0 * M_PI * 250.0 * t))
+            + 0.22f * static_cast<float>(std::sin(2.0 * M_PI * 1000.0 * t))
+            + 0.14f * static_cast<float>(std::sin(2.0 * M_PI * 4000.0 * t));
+        song = mix.process(sample);
+    }
+    check(song == dsp::AudioClass::music, "a continuous full-range mix classifies as music");
 }
 
 void testAdaptiveBandsMoveIndependently()
@@ -590,21 +620,51 @@ void testAdaptiveBandsMoveIndependently()
     for (int i = 0; i < total; ++i)
     {
         const double t = static_cast<double>(i) / rate;
-        dry[static_cast<size_t>(i)] = ampFromDb(-6.0f) * static_cast<float>(std::sin(2.0 * M_PI * 100.0 * t))
+        dry[static_cast<size_t>(i)] = ampFromDb(-6.0f) * static_cast<float>(std::sin(2.0 * M_PI * 60.0 * t))
             + ampFromDb(-24.0f) * static_cast<float>(std::sin(2.0 * M_PI * 2000.0 * t));
     }
     auto wet = dry;
     renderAdaptive(agc, wet, 256);
 
     const int start = total - 4000;
-    const float lowIn = goertzel(dry, start, total, 100.0, rate);
-    const float lowOut = goertzel(wet, start, total, 100.0, rate);
+    const float lowIn = goertzel(dry, start, total, 60.0, rate);
+    const float lowOut = goertzel(wet, start, total, 60.0, rate);
     const float midIn = goertzel(dry, start, total, 2000.0, rate);
     const float midOut = goertzel(wet, start, total, 2000.0, rate);
     const float lowDb = 20.0f * std::log10(std::max(lowOut, 1.0e-8f) / std::max(lowIn, 1.0e-8f));
     const float midDb = 20.0f * std::log10(std::max(midOut, 1.0e-8f) / std::max(midIn, 1.0e-8f));
     check(lowDb < -1.5f, "the loud low band is ducked, " + std::to_string(lowDb) + " dB");
     check(midDb > 3.0f, "the quiet mid band is boosted, " + std::to_string(midDb) + " dB");
+}
+
+void testBassSpikeLeavesTheVocal()
+{
+    constexpr double rate = 48000.0;
+    dsp::ProgramAdaptiveAGC agc;
+    agc.setDuck(0.0f);
+    agc.setMaxBoostDecibels(0.0f);
+    agc.prepare(rate, 1);
+
+    const int total = static_cast<int>(rate * 1.2);
+    const int burstAt = static_cast<int>(rate * 0.7);
+    const int burst = static_cast<int>(rate * 0.004);
+    std::vector<float> buffer(static_cast<size_t>(total));
+    for (int i = 0; i < total; ++i)
+    {
+        const double t = static_cast<double>(i) / rate;
+        float sample = ampFromDb(-12.0f) * static_cast<float>(std::sin(2.0 * M_PI * 2000.0 * t));
+        if (i >= burstAt && i < burstAt + burst)
+            sample += std::sin(2.0 * M_PI * 60.0 * t);
+        buffer[static_cast<size_t>(i)] = sample;
+    }
+    renderAdaptive(agc, buffer, 128);
+
+    const int before = burstAt - 4000;
+    const int after = burstAt + static_cast<int>(rate * 0.040);
+    const float vocalBefore = goertzel(buffer, before, burstAt - 500, 2000.0, rate);
+    const float vocalAfter = goertzel(buffer, after, after + 4000, 2000.0, rate);
+    const float change = 20.0f * std::log10(std::max(vocalAfter, 1.0e-8f) / std::max(vocalBefore, 1.0e-8f));
+    check(std::abs(change) < 1.5f, "a bass spike leaves the vocal alone, change " + std::to_string(change) + " dB");
 }
 } // namespace
 
@@ -629,6 +689,7 @@ int main()
     testAdaptivePeakGuardAndGap();
     testAdaptiveNoiseIsStresser();
     testAdaptiveBandsMoveIndependently();
+    testBassSpikeLeavesTheVocal();
 
     if (failures != 0)
     {

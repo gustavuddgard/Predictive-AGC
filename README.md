@@ -2,9 +2,11 @@
 
 A stereo leveler for Logic Pro, with a predictive sidechain ducker on the same plug-in. The main path is a slow leveler plus a 1 ms peak guard. The sidechain adds its own 1 ms, so Logic's delay compensation sees about 2 ms.
 
-The leveler splits the signal at the crossover (default 300 Hz) and again at 3.4 kHz, and rides each band on its own. Bass is not pulled down to lift the mids. Duck at 0% leaves a loud master where it is. A quiet passage can rise, up to the Max gain knob. Music will not boost past +6 dB even if that knob is higher. The peak guard looks one millisecond ahead and only turns down when the leveler would push a peak through −0.1 dBFS. It lets go on its own, so a cut from a burst does not stay on the next song.
+The leveler splits the delayed signal into four Linkwitz-Riley bands: under 150 Hz, 150–800 Hz, 800 Hz–3.5 kHz, and above 3.5 kHz. Each band has its own rider and its own lookahead limiter. A bass hit turns down the bass band and leaves the rest alone. Duck at 0% leaves a loud master where it is. A quiet passage can rise, up to the Max gain knob. Music will not boost past +6 dB even if that knob is higher.
 
-A classifier on the waveform picks the ballistics. Music holds an 800 ms release. Voice follows faster and freezes on a pause. Telephone rides only the middle band. A stresser — flat, jumpy, near full scale — freezes the slow leveler and lets the peak guard catch the bursts. Silence holds the leveler for about a breath, then eases it back to 0 dB, so a hole between two sources does not hand the next one a leftover cut.
+The limiter looks 1 ms ahead. A short spike is down before it reaches the output and back within about 10 ms, so the hit does not leave a hole. A level that stays up releases over 300–800 ms. A 0.5 ms smoother sits in front of the multiplier so the gain does not click. The sidechain crossover knob does not move these four bands.
+
+The classifier watches the waveform. Music holds an 800 ms release. Voice follows faster and freezes on a pause. Telephone rides only the two middle bands. Stresser is a flat, unpitched sound with real gaps in it, not a loud mix and not a snare. Silence holds the leveler for about a breath, then eases it back to 0 dB, so a hole between two sources does not hand the next one a leftover cut. The limiter does not freeze in that pause.
 
 The older logistic engage model is still in the tree. It is not on this signal path.
 

@@ -93,7 +93,7 @@ Agc2AudioProcessorEditor::Agc2AudioProcessorEditor(Agc2AudioProcessor& owner)
     title.setJustificationType(juce::Justification::bottomLeft);
     addAndMakeVisible(title);
 
-    subtitle.setText("Adaptive leveler", juce::dontSendNotification);
+    subtitle.setText("Four-band leveler", juce::dontSendNotification);
     subtitle.setFont(juce::Font(juce::FontOptions(13.0f)));
     subtitle.setColour(juce::Label::textColourId, muted);
     subtitle.setJustificationType(juce::Justification::centredLeft);

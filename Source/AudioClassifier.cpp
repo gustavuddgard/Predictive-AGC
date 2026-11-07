@@ -94,6 +94,7 @@ void AudioClassifier::prepare(double newSampleRate)
     envelopeCoef = onePole(0.010, sampleRate);
     syllableCoef = onePole(0.080, sampleRate);
     varianceCoef = onePole(0.300, sampleRate);
+    holeCoef = onePole(0.300, sampleRate);
     hangSamples = std::max(1, static_cast<int>(std::llround(0.080 * sampleRate)));
     reset();
 }
@@ -120,6 +121,7 @@ void AudioClassifier::reset()
     bandwidthRatio = 0.0f;
     syllableAmount = 0.0f;
     stationarity = 1.0f;
+    hole = 0.0f;
     fastDb = slowDb = -160.0f;
     current = pending = AudioClass::silence;
     pendingSamples = 0;
@@ -176,9 +178,11 @@ AudioClass AudioClassifier::decide() const
     if (fastDb < vadThresholdDb)
         return AudioClass::silence;
 
-    // Clipped bursts sit near full scale with a flat spectrum. Crest alone misses them.
-    const bool noisy = entropy > 0.68f && (crestDb > 8.0f || stationarity < 0.45f || slowDb > -12.0f);
-    if (noisy)
+    // A mastered mix is loud and full-range, and a snare has crest. Neither is a
+    // stresser. That label needs a flat spectrum, gaps in the recent level, and
+    // no pitch, which is what a burst of noise between digital holes looks like.
+    const bool stresser = entropy > 0.70f && hole > 0.22f && pitchScore < 0.35f;
+    if (stresser)
         return AudioClass::stresser;
     if (bandwidthRatio > 0.90f && entropy < 0.80f)
         return AudioClass::telephone;
@@ -200,6 +204,8 @@ AudioClass AudioClassifier::process(float sample)
 
     fastDb = decibels(fastPower);
     slowDb = decibels(slowPower);
+    const float quiet = fastDb < vadThresholdDb ? 1.0f : 0.0f;
+    hole += static_cast<float>(holeCoef) * (quiet - hole);
     const float peakDb = static_cast<float>(20.0 * std::log10(std::max(peak, 1.0e-8)));
     crestDb = peakDb - slowDb;
 
@@ -249,7 +255,7 @@ AudioClass AudioClassifier::process(float sample)
         updatePitch();
 
     const AudioClass raw = decide();
-    if (raw == AudioClass::silence || raw == AudioClass::stresser)
+    if (raw == AudioClass::silence)
     {
         current = pending = raw;
         pendingSamples = 0;

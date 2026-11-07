@@ -5,9 +5,10 @@
 namespace dsp
 {
 
-// Slow per-band leveler plus a lookahead peak guard. The classifier picks the
-// ballistics. The peak guard is the only stage allowed to cut a full-scale burst,
-// and it releases on its own so that cut does not ride into the next program.
+// Four-band leveler plus a per-band lookahead limiter. A hit in the bass
+// reduces the bass band only. A short spike recovers in about 10 ms. A level
+// that stays up uses the slow release. The 0.5 ms smoother is only the
+// de-zipper into the multiplier.
 class ProgramAdaptiveAGC
 {
 public:
@@ -59,22 +60,25 @@ private:
 
     struct Channel
     {
-        Split lowSplit;
-        Split highSplit;
+        Split audio[3];
+        Split control[3];
         int writeIndex = 0;
         static constexpr int delayCapacity = 1024;
         float delay[delayCapacity] {};
+        float controlBand[4][delayCapacity] {};
     };
 
     void updateLatency();
-    void updateCrossovers(bool telephone);
+    void tuneAll();
     void setButterworth(Biquad& filter, bool highpass, double frequency);
     void tuneSplit(Split& split, double frequency);
-    float desiredLevelerDb(float levelDb, bool telephoneMid) const;
-    void smoothToward(float& gainDb, float desiredDb, float seconds);
+    void splitFour(Split* splits, float input, float* bands) noexcept;
+    float desiredLevelerDb(float levelDb, int band) const;
+    void smoothToward(float& value, float target, float seconds);
 
     static constexpr int maxChannels = 8;
-    static constexpr int bandCount = 3;
+    static constexpr int bandCount = 4;
+    static constexpr int splitCount = 3;
 
     AudioClassifier classifier;
     Channel channels[maxChannels];
@@ -88,27 +92,26 @@ private:
     float duck = 0.0f;
     float vadThresholdDb = -42.0f;
     bool bypassed = false;
-    bool telephoneSplit = false;
-    float tunedLowHz = -1.0f;
-    float tunedHighHz = -1.0f;
+    bool splitsTuned = false;
 
     int preparedChannels = 0;
     int latency = 1;
     int silenceSamples = 0;
     int silenceHold = 1;
+    int spikeSamples = 1;
 
     double bandPower[bandCount] {};
-    float bandGainDb[bandCount] {};
-    float limitGain = 1.0f;
+    float levelerDb[bandCount] {};
+    float transientGain[bandCount] {};
+    float vcaGain[bandCount] {};
+    int hotSamples[bandCount] {};
     float appliedGainDb = 0.0f;
     bool limiting = false;
 
-    double attackSeconds = 0.005;
-    double releaseSeconds = 0.8;
-    double limitAttackSeconds = 0.005;
-    double limitReleaseSeconds = 0.4;
     float ratio = 1.5f;
     float boostCap = 6.0f;
+    float stationaryRelease = 0.8f;
+    bool telephone = false;
 };
 
 } // namespace dsp

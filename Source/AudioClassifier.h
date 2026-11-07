@@ -79,6 +79,7 @@ private:
     double envelopeCoef = 0.0;
     double syllableCoef = 0.0;
     double varianceCoef = 0.0;
+    double holeCoef = 0.0;
 
     float pitch[pitchCapacity] {};
     int pitchWrite = 0;
@@ -90,6 +91,7 @@ private:
     float bandwidthRatio = 0.0f;
     float syllableAmount = 0.0f;
     float stationarity = 1.0f;
+    float hole = 0.0f;
     float fastDb = -160.0f;
     float slowDb = -160.0f;
 

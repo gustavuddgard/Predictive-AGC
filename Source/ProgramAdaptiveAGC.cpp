@@ -10,6 +10,7 @@ namespace
 constexpr double pi = 3.14159265358979323846;
 constexpr double butterworthQ = 0.7071067811865476;
 constexpr float ceilingDb = -0.1f;
+constexpr double splitHz[3] = { 150.0, 800.0, 3500.0 };
 
 double timeCoefficient(double seconds, double rate)
 {
@@ -95,21 +96,26 @@ void ProgramAdaptiveAGC::tuneSplit(Split& split, double frequency)
     setButterworth(split.highB, true, frequency);
 }
 
-void ProgramAdaptiveAGC::updateCrossovers(bool telephone)
+void ProgramAdaptiveAGC::tuneAll()
 {
-    const float lowHz = telephone ? 150.0f : crossoverHz;
-    const float highHz = telephone ? 3500.0f : 3400.0f;
-    if (telephone == telephoneSplit && std::abs(lowHz - tunedLowHz) < 0.5f && std::abs(highHz - tunedHighHz) < 0.5f)
-        return;
-
-    telephoneSplit = telephone;
-    tunedLowHz = lowHz;
-    tunedHighHz = highHz;
     for (int channel = 0; channel < maxChannels; ++channel)
     {
-        tuneSplit(channels[channel].lowSplit, lowHz);
-        tuneSplit(channels[channel].highSplit, highHz);
+        for (int split = 0; split < splitCount; ++split)
+        {
+            tuneSplit(channels[channel].audio[split], splitHz[split]);
+            tuneSplit(channels[channel].control[split], splitHz[split]);
+        }
     }
+    splitsTuned = true;
+}
+
+void ProgramAdaptiveAGC::splitFour(Split* splits, float input, float* bands) noexcept
+{
+    float rest = 0.0f;
+    splits[0].process(input, bands[0], rest);
+    float upper = 0.0f;
+    splits[1].process(rest, bands[1], upper);
+    splits[2].process(upper, bands[2], bands[3]);
 }
 
 void ProgramAdaptiveAGC::updateLatency()
@@ -124,10 +130,10 @@ void ProgramAdaptiveAGC::prepare(double newSampleRate, int numChannels)
     classifier.prepare(sampleRate);
     classifier.setVadThresholdDecibels(vadThresholdDb);
     updateLatency();
-    tunedLowHz = tunedHighHz = -1.0f;
-    telephoneSplit = false;
-    updateCrossovers(false);
+    splitsTuned = false;
+    tuneAll();
     silenceHold = std::max(1, static_cast<int>(std::llround(0.400 * sampleRate)));
+    spikeSamples = std::max(1, static_cast<int>(std::llround(0.012 * sampleRate)));
     reset();
 }
 
@@ -136,16 +142,24 @@ void ProgramAdaptiveAGC::reset()
     classifier.reset();
     for (auto& channel : channels)
     {
-        channel.lowSplit.reset();
-        channel.highSplit.reset();
+        for (int split = 0; split < splitCount; ++split)
+        {
+            channel.audio[split].reset();
+            channel.control[split].reset();
+        }
         channel.writeIndex = 0;
         std::fill(channel.delay, channel.delay + Channel::delayCapacity, 0.0f);
+        for (int band = 0; band < bandCount; ++band)
+            std::fill(channel.controlBand[band], channel.controlBand[band] + Channel::delayCapacity, 0.0f);
     }
-    for (double& power : bandPower)
-        power = 0.0;
-    for (float& gain : bandGainDb)
-        gain = 0.0f;
-    limitGain = 1.0f;
+    for (int band = 0; band < bandCount; ++band)
+    {
+        bandPower[band] = 0.0;
+        levelerDb[band] = 0.0f;
+        transientGain[band] = 1.0f;
+        vcaGain[band] = 1.0f;
+        hotSamples[band] = 0;
+    }
     appliedGainDb = 0.0f;
     limiting = false;
     silenceSamples = 0;
@@ -172,6 +186,7 @@ void ProgramAdaptiveAGC::setLookaheadMilliseconds(float ms)
 
 void ProgramAdaptiveAGC::setCrossoverFrequency(float hz)
 {
+    // The four leveler bands are fixed. This still feeds the sidechain ducker.
     crossoverHz = std::clamp(hz, 100.0f, 1000.0f);
 }
 
@@ -188,9 +203,13 @@ void ProgramAdaptiveAGC::setVadThresholdDecibels(float db)
 
 void ProgramAdaptiveAGC::setBypassed(bool shouldBypass) { bypassed = shouldBypass; }
 
-float ProgramAdaptiveAGC::desiredLevelerDb(float levelDb, bool telephoneMid) const
+float ProgramAdaptiveAGC::desiredLevelerDb(float levelDb, int band) const
 {
-    const float target = telephoneMid ? -18.0f : targetDb;
+    const bool telephoneBand = telephone && (band == 1 || band == 2);
+    const bool telephoneBypass = telephone && (band == 0 || band == 3);
+    if (telephoneBypass)
+        return 0.0f;
+    const float target = telephoneBand ? -18.0f : targetDb;
     const float over = levelDb - target;
     if (over >= 0.0f)
     {
@@ -202,32 +221,35 @@ float ProgramAdaptiveAGC::desiredLevelerDb(float levelDb, bool telephoneMid) con
     return std::min(-over, boostCap);
 }
 
-void ProgramAdaptiveAGC::smoothToward(float& gainDb, float desiredDb, float seconds)
+void ProgramAdaptiveAGC::smoothToward(float& value, float target, float seconds)
 {
     const float coefficient = static_cast<float>(timeCoefficient(static_cast<double>(seconds), sampleRate));
-    gainDb += coefficient * (desiredDb - gainDb);
+    value += coefficient * (target - value);
 }
 
 void ProgramAdaptiveAGC::process(float* const* channelData, int numChannels, int numSamples)
 {
     if (channelData == nullptr || numChannels <= 0 || numSamples <= 0 || preparedChannels <= 0)
         return;
+    if (!splitsTuned)
+        tuneAll();
 
     const int count = std::min(numChannels, preparedChannels);
     const float ceiling = linearFromDb(ceilingDb);
+    const float zipCoefficient = static_cast<float>(timeCoefficient(0.0005, sampleRate));
+    // A deep cut has to finish inside the lookahead. 0.5 ms is the de-zipper
+    // for everything else; it is too slow to land a 6 dB drop in 1 ms.
+    const float settleCoefficient = static_cast<float>(1.0 - std::exp(std::log(0.03) / static_cast<double>(std::max(latency, 1))));
 
     for (int sampleIndex = 0; sampleIndex < numSamples; ++sampleIndex)
     {
         float mono = 0.0f;
-        float peakNow = 0.0f;
         int contributing = 0;
         for (int channel = 0; channel < count; ++channel)
         {
             if (channelData[channel] == nullptr)
                 continue;
-            const float input = channelData[channel][sampleIndex];
-            mono += input;
-            peakNow = std::max(peakNow, std::abs(input));
+            mono += channelData[channel][sampleIndex];
             ++contributing;
         }
         if (contributing == 0)
@@ -235,46 +257,38 @@ void ProgramAdaptiveAGC::process(float* const* channelData, int numChannels, int
         mono /= static_cast<float>(contributing);
 
         const AudioClass klass = classifier.process(mono);
-        const bool telephone = klass == AudioClass::telephone;
-        updateCrossovers(telephone);
-
-        const bool stresser = klass == AudioClass::stresser || classifier.getStationarity() < 0.35f;
+        telephone = klass == AudioClass::telephone;
         if (klass == AudioClass::silence)
             ++silenceSamples;
         else
             silenceSamples = 0;
 
-        if (bypassed || klass == AudioClass::stresser)
-        {
-            attackSeconds = 0.005;
-            releaseSeconds = 0.2;
-        }
-        else if (klass == AudioClass::voice)
+        if (klass == AudioClass::voice)
         {
             ratio = 2.0f;
             boostCap = maxBoostDb;
-            attackSeconds = 0.010;
-            releaseSeconds = 0.350;
+            stationaryRelease = 0.300f;
         }
         else if (klass == AudioClass::music)
         {
             ratio = 1.5f;
             boostCap = std::min(maxBoostDb, 6.0f);
-            attackSeconds = 0.020;
-            releaseSeconds = std::max(baseReleaseMs, 800.0f) * 0.001f;
+            stationaryRelease = std::min(1.5f, std::max(baseReleaseMs, 800.0f) * 0.001f);
+        }
+        else if (klass == AudioClass::stresser)
+        {
+            ratio = 1.5f;
+            boostCap = maxBoostDb;
+            stationaryRelease = 0.300f;
         }
         else
         {
             ratio = 1.5f;
             boostCap = maxBoostDb;
-            attackSeconds = 0.015;
-            releaseSeconds = std::max(baseReleaseMs, 500.0f) * 0.001f;
+            stationaryRelease = std::clamp(baseReleaseMs, 300.0f, 800.0f) * 0.001f;
         }
-        limitAttackSeconds = stresser ? 0.0002 : 0.005;
-        limitReleaseSeconds = stresser ? 0.100 : 0.400;
 
-        float lookPeak = peakNow;
-        float bandSample[maxChannels][bandCount];
+        float audioBand[maxChannels][bandCount];
         for (int channel = 0; channel < count; ++channel)
         {
             if (channelData[channel] == nullptr)
@@ -282,22 +296,17 @@ void ProgramAdaptiveAGC::process(float* const* channelData, int numChannels, int
             Channel& state = channels[channel];
             if (state.writeIndex >= latency)
                 state.writeIndex = 0;
+
             const float delayed = state.delay[state.writeIndex];
-            state.delay[state.writeIndex] = channelData[channel][sampleIndex];
+            splitFour(state.audio, delayed, audioBand[channel]);
+
+            const float input = channelData[channel][sampleIndex];
+            state.delay[state.writeIndex] = input;
+            float controlNow[bandCount];
+            splitFour(state.control, input, controlNow);
+            for (int band = 0; band < bandCount; ++band)
+                state.controlBand[band][state.writeIndex] = controlNow[band];
             state.writeIndex = (state.writeIndex + 1) % latency;
-
-            for (int tap = 0; tap < latency; ++tap)
-                lookPeak = std::max(lookPeak, std::abs(state.delay[tap]));
-
-            float low = 0.0f;
-            float rest = 0.0f;
-            state.lowSplit.process(delayed, low, rest);
-            float mid = 0.0f;
-            float high = 0.0f;
-            state.highSplit.process(rest, mid, high);
-            bandSample[channel][0] = low;
-            bandSample[channel][1] = mid;
-            bandSample[channel][2] = high;
         }
 
         const float powerCoef = static_cast<float>(timeCoefficient(
@@ -305,65 +314,100 @@ void ProgramAdaptiveAGC::process(float* const* channelData, int numChannels, int
         for (int band = 0; band < bandCount; ++band)
         {
             double energy = 0.0;
+            int used = 0;
             for (int channel = 0; channel < count; ++channel)
             {
                 if (channelData[channel] == nullptr)
                     continue;
-                const float value = bandSample[channel][band];
+                const int newest = (channels[channel].writeIndex - 1 + latency) % latency;
+                const float value = channels[channel].controlBand[band][newest];
                 energy += static_cast<double>(value) * value;
+                ++used;
             }
-            energy /= static_cast<double>(contributing);
+            if (used > 0)
+                energy /= static_cast<double>(used);
             bandPower[band] += static_cast<double>(powerCoef) * (energy - bandPower[band]);
         }
 
         const bool shortSilence = klass == AudioClass::silence && silenceSamples < silenceHold;
-        const bool freezeLeveler = shortSilence || klass == AudioClass::stresser;
-        float loudestLinear = 1.0f;
+        const bool longSilence = klass == AudioClass::silence && !shortSilence;
+        float levelerLin[bandCount];
+        float transTarget[bandCount];
         for (int band = 0; band < bandCount; ++band)
         {
             const float levelDb = decibelPower(bandPower[band]);
-            const bool bypassBand = telephone && band != 1;
             float desired = 0.0f;
-            if (!bypassBand && levelDb >= vadThresholdDb && !bypassed)
-                desired = desiredLevelerDb(levelDb, telephone && band == 1);
+            if (levelDb >= vadThresholdDb && !bypassed)
+                desired = desiredLevelerDb(levelDb, band);
 
             if (bypassed)
-                smoothToward(bandGainDb[band], 0.0f, 0.005f);
-            else if (klass == AudioClass::silence && !shortSilence)
-                smoothToward(bandGainDb[band], 0.0f, 0.250f);
-            else if (!freezeLeveler)
+                smoothToward(levelerDb[band], 0.0f, 0.005f);
+            else if (longSilence)
+                smoothToward(levelerDb[band], 0.0f, 0.250f);
+            else if (!shortSilence)
             {
-                const float seconds = desired < bandGainDb[band] ? static_cast<float>(attackSeconds)
-                                                                  : static_cast<float>(releaseSeconds);
-                smoothToward(bandGainDb[band], desired, seconds);
+                const float seconds = desired < levelerDb[band] ? 0.020f : stationaryRelease;
+                smoothToward(levelerDb[band], desired, seconds);
             }
-
-            loudestLinear = std::max(loudestLinear, linearFromDb(bandGainDb[band]));
+            levelerLin[band] = linearFromDb(levelerDb[band]);
+            transTarget[band] = 1.0f;
         }
 
-        const float required = lookPeak * loudestLinear;
-        float desiredLimit = 1.0f;
-        if (required > ceiling && lookPeak > 1.0e-6f)
-            desiredLimit = ceiling / required;
-        if (bypassed)
-            desiredLimit = 1.0f;
-        // A mastered peak a fraction of a decibel over the ceiling uses the slow
-        // music attack. A boost that would actually clip uses the fast attack,
-        // because 1 ms of lookahead cannot finish a 5 ms move.
-        const float limitSeconds = desiredLimit < limitGain * 0.89f
-            ? 0.0002f
-            : (desiredLimit < limitGain ? static_cast<float>(limitAttackSeconds)
-                                        : static_cast<float>(limitReleaseSeconds));
-        limitGain += static_cast<float>(timeCoefficient(static_cast<double>(limitSeconds), sampleRate))
-            * (desiredLimit - limitGain);
-        limitGain = std::clamp(limitGain, 0.0f, 1.0f);
-        limiting = limitGain < 0.955f;
+        // Each band may use the whole ceiling on its own, so a bass hit does
+        // not take the vocal down with it. If a sample in the window would
+        // still sum hot, only the bands that make that sample are trimmed.
+        for (int channel = 0; channel < count; ++channel)
+        {
+            if (channelData[channel] == nullptr)
+                continue;
+            Channel& state = channels[channel];
+            for (int tap = 0; tap < latency; ++tap)
+            {
+                float predicted = 0.0f;
+                float contribution[bandCount];
+                for (int band = 0; band < bandCount; ++band)
+                {
+                    contribution[band] = state.controlBand[band][tap] * levelerLin[band];
+                    predicted += contribution[band];
+                }
+                const float magnitude = std::abs(predicted);
+                if (magnitude <= ceiling)
+                    continue;
+                const float scale = ceiling / magnitude;
+                for (int band = 0; band < bandCount; ++band)
+                {
+                    if (std::abs(contribution[band]) > 0.30f * magnitude)
+                        transTarget[band] = std::min(transTarget[band], scale);
+                }
+            }
+        }
 
-        float reported = bandGainDb[0];
-        for (float gain : bandGainDb)
-            reported = std::max(reported, gain);
-        reported += 20.0f * std::log10(std::max(limitGain, 1.0e-6f));
-        appliedGainDb = reported;
+        limiting = false;
+        float loudestDb = -160.0f;
+        for (int band = 0; band < bandCount; ++band)
+        {
+            if (transTarget[band] < 0.98f)
+                ++hotSamples[band];
+            const bool spike = hotSamples[band] < spikeSamples;
+            if (transTarget[band] < transientGain[band])
+                transientGain[band] = transTarget[band];
+            else
+            {
+                const float releaseSeconds = spike ? 0.010f : stationaryRelease;
+                smoothToward(transientGain[band], transTarget[band], releaseSeconds);
+                if (transientGain[band] > 0.995f)
+                    hotSamples[band] = 0;
+            }
+            transientGain[band] = std::clamp(transientGain[band], 0.0f, 1.0f);
+            if (transientGain[band] < 0.97f)
+                limiting = true;
+
+            const float desiredLin = levelerLin[band] * transientGain[band];
+            const float coefficient = desiredLin < vcaGain[band] * 0.89f ? settleCoefficient : zipCoefficient;
+            vcaGain[band] += coefficient * (desiredLin - vcaGain[band]);
+            loudestDb = std::max(loudestDb, 20.0f * std::log10(std::max(vcaGain[band], 1.0e-6f)));
+        }
+        appliedGainDb = loudestDb;
 
         for (int channel = 0; channel < count; ++channel)
         {
@@ -371,8 +415,8 @@ void ProgramAdaptiveAGC::process(float* const* channelData, int numChannels, int
                 continue;
             float sum = 0.0f;
             for (int band = 0; band < bandCount; ++band)
-                sum += bandSample[channel][band] * linearFromDb(bandGainDb[band]);
-            channelData[channel][sampleIndex] = sum * limitGain;
+                sum += audioBand[channel][band] * vcaGain[band];
+            channelData[channel][sampleIndex] = sum;
         }
     }
 }

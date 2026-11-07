@@ -2,7 +2,7 @@
 
 A stereo leveler for Logic Pro, with a predictive sidechain ducker on the same plug-in. The leveler adds 1.5 ms and the sidechain adds 1.0 ms, so Logic's delay compensation sees about 2.5 ms.
 
-The learned part is a six-feature logistic model with seven stored weights. It only decides when the leveler should engage. The first feature is how far the level sits from the target, in either direction, looked at over the next 1.5 ms. The gain amount is a deterministic rider: target minus the measured peak, through a 6 dB knee, clamped by max boost and max cut. A 1.5 ms delay lets the 0.5 ms engage attack land before the audio is heard. While the latch is off, gain holds, so a steady phrase does not pump.
+The learned part is a logistic model. It sees the six level features plus the live knobs, and it is trained on every lookahead from 1.5 ms to 40 ms. It only decides when the leveler should engage. Duck at 0% and Max boost at 0 dB keep the gain at 0 dB. A cut is allowed only when the lookahead is long enough for the 15 ms attack to finish before that audio is heard, so a short hit is not pumped. The gain amount is a deterministic rider: target minus the measured peak, through a 6 dB knee, clamped by max boost and max cut. A 1.5 ms delay lets the 0.5 ms engage attack land before the audio is heard. While the latch is off, gain holds, so a steady phrase does not pump.
 
 A pause under the noise floor freezes the envelope and the gain. The release filter does not lift room tone between words. At the default speed the release is 400 ms. Boost cannot exceed +6 dB.
 
@@ -17,6 +17,7 @@ Speed does not slow the attack. That would miss the 1.5 ms window. Speed 50% is 
 - **Noise floor** — pauses under this level hold the current gain. Default −42 dB.
 - **Duck** — how much of a loud peak is eased down. Default 40%.
 - **Speed** — release and hang. 50% is a 400 ms release.
+- **Lookahead** — delay on the main path, 1.5–40 ms, default 1.5 ms. The sidechain ducker adds its own 1 ms. At 40 ms a loud call can be eased down before it is heard.
 - **Link** — one detector and one gain for every channel.
 - **Bypass** — fades the leveler to 0 dB and keeps its delay.
 

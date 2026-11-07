@@ -3,8 +3,9 @@
 namespace dsp
 {
 
-// Feedforward leveler. A baked model decides when to engage; a 1.5 ms delay
-// gives that decision time to land on the audio. No JUCE types in here.
+// Feedforward leveler. A baked model decides when to engage. The delay is the
+// lookahead control, from 1.5 ms to 40 ms, so a move can finish before the
+// audio is heard. No JUCE types in here.
 class PredictiveAGC
 {
 public:
@@ -18,6 +19,7 @@ public:
     void setVadThresholdDecibels(float db);
     void setDuck(float amount);
     void setSpeed(float normalised);
+    void setLookaheadMilliseconds(float ms);
     void setLinked(bool shouldLink);
     void setBypassed(bool shouldBypass);
 
@@ -27,6 +29,7 @@ public:
     int getLatencySamples() const;
 
     static int latencySamplesFor(double sampleRate);
+    static int latencySamplesFor(double sampleRate, float lookaheadMs);
 
 private:
     struct Channel
@@ -47,7 +50,7 @@ private:
         bool releaseArmed = true;
         bool vadOpen = false;
         int vadHoldSamples = 0;
-        static constexpr int delayCapacity = 1024;
+        static constexpr int delayCapacity = 8192;
         float delayStorage[delayCapacity] {};
     };
 
@@ -58,7 +61,7 @@ private:
     float readDelay(Channel& channel, float input);
 
     static double timeCoef(double seconds, double sampleRate);
-    static float modelProbability(const float features[6]);
+    static float modelProbability(const float* features);
 
     double sampleRate = 48000.0;
     float targetDb = -18.0f;
@@ -67,6 +70,7 @@ private:
     float vadThresholdDb = -42.0f;
     float duck = 0.4f;
     float speed = 0.5f;
+    float lookaheadMs = 1.5f;
     bool linked = true;
     bool bypassed = false;
 

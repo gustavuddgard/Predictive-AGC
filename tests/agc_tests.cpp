@@ -73,6 +73,14 @@ void testLatency()
         check(std::abs(ms - 1.5) < 0.03, "latency is 1.5 ms at " + std::to_string(rate) + " (" + std::to_string(ms) + " ms)");
         check(samples == dsp::PredictiveAGC::latencySamplesFor(rate), "reported latency matches the 1.5 ms rounding");
     }
+
+    dsp::PredictiveAGC longLook;
+    longLook.setLookaheadMilliseconds(40.0f);
+    longLook.prepare(48000.0, 1);
+    const double longMs = 1000.0 * static_cast<double>(longLook.getLatencySamples()) / 48000.0;
+    check(std::abs(longMs - 40.0) < 0.05, "40 ms lookahead is 40 ms, was " + std::to_string(longMs));
+    check(longLook.getLatencySamples() == dsp::PredictiveAGC::latencySamplesFor(48000.0, 40.0f),
+          "40 ms lookahead matches the sample rounding");
 }
 
 void testSteadyToneIsLeftAlone()
@@ -121,10 +129,48 @@ void testSteadyToneIsLeftAlone()
     check(maxDiff < 1.0e-4f, "steady tone is left alone, max diff " + std::to_string(maxDiff));
 }
 
-void testStepIsCaughtInsideTheDelay()
+void testShortLookaheadLeavesTheStep()
 {
     constexpr double rate = 48000.0;
     dsp::PredictiveAGC agc;
+    agc.prepare(rate, 1);
+    const int latency = agc.getLatencySamples();
+    const int hold = static_cast<int>(0.12 * rate);
+    const int total = hold * 2;
+    std::vector<float> dry(static_cast<size_t>(total), 0.0f);
+    for (int i = 0; i < total; ++i)
+    {
+        const float db = i < hold ? -18.0f : -6.0f;
+        const double t = static_cast<double>(i) / rate;
+        dry[static_cast<size_t>(i)] = ampFromDb(db) * static_cast<float>(std::sin(2.0 * M_PI * 1000.0 * t + M_PI / 2.0));
+    }
+
+    auto wet = dry;
+    float maxProbability = 0.0f;
+    for (int offset = 0; offset < total; offset += 8)
+    {
+        const int count = std::min(8, total - offset);
+        float* pointer = wet.data() + offset;
+        float* channels[] = { pointer };
+        agc.process(channels, 1, count);
+        if (offset + count > hold)
+            maxProbability = std::max(maxProbability, agc.getEngageProbability());
+    }
+
+    check(maxProbability < 0.5f, "a 1.5 ms lookahead does not engage a cut, was " + std::to_string(maxProbability));
+    check(std::abs(agc.getGainDecibels()) < 0.5f, "a cut that cannot finish inside 1.5 ms stays at unity, gain " + std::to_string(agc.getGainDecibels()));
+
+    float maxDiff = 0.0f;
+    for (int i = latency + 1000; i < total; ++i)
+        maxDiff = std::max(maxDiff, std::abs(wet[static_cast<size_t>(i)] - dry[static_cast<size_t>(i - latency)]));
+    check(maxDiff < 1.0e-3f, "short lookahead leaves the step untouched, max diff " + std::to_string(maxDiff));
+}
+
+void testLongLookaheadFinishesTheDuck()
+{
+    constexpr double rate = 48000.0;
+    dsp::PredictiveAGC agc;
+    agc.setLookaheadMilliseconds(40.0f);
     agc.prepare(rate, 1);
     const int latency = agc.getLatencySamples();
     const int hold = static_cast<int>(0.12 * rate);
@@ -154,17 +200,41 @@ void testStepIsCaughtInsideTheDelay()
     const int window = 64;
     const float inPeak = peakDb(dry, hold, hold + window);
     const float outPeak = peakDb(wet, hold + latency, hold + latency + window);
-    check(outPeak > inPeak - 3.0f,
-          "the transient is not slammed, in " + std::to_string(inPeak)
+    check(outPeak < inPeak - 2.5f,
+          "the step is already ducked when it leaves a 40 ms lookahead, in " + std::to_string(inPeak)
               + " dB, out " + std::to_string(outPeak) + " dB");
     check(agc.getGainDecibels() < -3.0f && agc.getGainDecibels() > -8.0f,
           "the step settles into a partial duck, gain " + std::to_string(agc.getGainDecibels()));
+}
+
+void testKnobsAtZeroStayTransparent()
+{
+    constexpr double rate = 48000.0;
+    dsp::PredictiveAGC agc;
+    agc.setLookaheadMilliseconds(40.0f);
+    agc.setDuck(0.0f);
+    agc.setMaxBoostDecibels(0.0f);
+    agc.prepare(rate, 1);
+    const int latency = agc.getLatencySamples();
+    const int total = static_cast<int>(0.30 * rate);
+    const auto dry = tone(rate, -6.0f, total);
+    auto wet = dry;
+    render(agc, wet, 64);
+
+    check(std::abs(agc.getGainDecibels()) < 0.4f,
+          "duck 0 and boost 0 hold unity on a hot tone, gain " + std::to_string(agc.getGainDecibels()));
+
+    float maxDiff = 0.0f;
+    for (int i = latency + 1000; i < total; ++i)
+        maxDiff = std::max(maxDiff, std::abs(wet[static_cast<size_t>(i)] - dry[static_cast<size_t>(i - latency)]));
+    check(maxDiff < 1.0e-3f, "transparent knobs leave the hot tone untouched, max diff " + std::to_string(maxDiff));
 }
 
 void testPauseHoldsGain()
 {
     constexpr double rate = 48000.0;
     dsp::PredictiveAGC agc;
+    agc.setLookaheadMilliseconds(40.0f);
     agc.prepare(rate, 1);
 
     const int hotSamples = static_cast<int>(0.15 * rate);
@@ -228,6 +298,7 @@ void testLinkMovesBothChannels()
 {
     constexpr double rate = 48000.0;
     dsp::PredictiveAGC agc;
+    agc.setLookaheadMilliseconds(40.0f);
     agc.prepare(rate, 2);
     agc.setLinked(true);
 
@@ -375,7 +446,9 @@ int main()
 {
     testLatency();
     testSteadyToneIsLeftAlone();
-    testStepIsCaughtInsideTheDelay();
+    testShortLookaheadLeavesTheStep();
+    testLongLookaheadFinishesTheDuck();
+    testKnobsAtZeroStayTransparent();
     testPauseHoldsGain();
     testNoiseFloorIsNotBoosted();
     testBoostIsCappedAtSixDb();

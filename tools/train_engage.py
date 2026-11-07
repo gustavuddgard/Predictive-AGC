@@ -2,13 +2,10 @@
 """Train the AGC 2.0 engage predictor and write Source/EngageWeights.h.
 
 The detector math here is the source of truth for Source/PredictiveAGC.cpp.
-Labels follow the level over the next 1.5 ms: engage when a sample in that
-window sits more than 2 dB off the target and above the noise gate. Samples
-below the gate are not engagement targets.
-
-The baked model is logistic regression on these six features. Feature 0 is the
-absolute level error, so one hyperplane can engage both above and below the
-target. Slope still carries the sign of the move.
+Thirteen features: six from the level detector, then lookahead, target, duck,
+max boost, max cut, noise floor, and speed. Lookahead is drawn from 1.5 ms
+to 40 ms. A cut is labeled only when that lookahead can hide the 15 ms attack.
+Duck at 0 and boost at 0 keep the desired gain at 0 dB.
 """
 
 from __future__ import annotations
@@ -19,10 +16,9 @@ from pathlib import Path
 import numpy as np
 
 SR = 48000
-TARGET_DB = -18.0
-HORIZON = int(round(0.0015 * SR))  # 72 samples, 1.5 ms
 GATE_DB = -60.0
 OFF_TARGET_DB = 2.0
+INPUT_COUNT = 13
 
 PEAK_RELEASE_SEC = 0.020
 RMS_SEC = 0.005
@@ -35,6 +31,9 @@ ACCEL_SCALE = 50.0
 CREST_SCALE = 12.0
 LEVEL_SCALE = 40.0
 FEATURE_LIMIT = 3.0
+
+# Default knobs, matching the plugin.
+DEFAULT = dict(target=-18.0, duck=0.4, boost=6.0, cut=24.0, vad=-42.0, speed=0.5)
 
 
 def coef(seconds: float, sr: float = SR) -> float:
@@ -49,8 +48,8 @@ def clamp(value: float, lo: float, hi: float) -> float:
     return lo if value < lo else hi if value > hi else value
 
 
-def features_from_signal(samples: np.ndarray, target_db: float = TARGET_DB) -> tuple[np.ndarray, np.ndarray]:
-    """Return (features[N, 6], level_db[N]) using the runtime detector."""
+def detect(samples: np.ndarray) -> dict[str, np.ndarray]:
+    """Control-free detector trace. Feature 0 is applied later with the live target."""
     peak_coef = coef(PEAK_RELEASE_SEC)
     rms_coef = coef(RMS_SEC)
     slope_coef = coef(SLOPE_SMOOTH_SEC)
@@ -64,8 +63,10 @@ def features_from_signal(samples: np.ndarray, target_db: float = TARGET_DB) -> t
     prev_slope = 0.0
     accel = 0.0
 
-    feats = np.zeros((len(samples), 6), dtype=np.float64)
     level = np.zeros(len(samples), dtype=np.float64)
+    slope_a = np.zeros(len(samples), dtype=np.float64)
+    accel_a = np.zeros(len(samples), dtype=np.float64)
+    crest_a = np.zeros(len(samples), dtype=np.float64)
 
     for i, sample in enumerate(samples):
         mag = abs(float(sample))
@@ -86,35 +87,80 @@ def features_from_signal(samples: np.ndarray, target_db: float = TARGET_DB) -> t
         prev_level = level_db
         prev_slope = slope
 
-        crest = peak_db - rms_db
-        activity = clamp((level_db - GATE_DB) / 20.0, 0.0, 1.0)
-
-        feats[i, 0] = clamp(abs(level_db - target_db) / ERROR_SCALE, 0.0, FEATURE_LIMIT)
-        feats[i, 1] = clamp(slope / SLOPE_SCALE, -FEATURE_LIMIT, FEATURE_LIMIT)
-        feats[i, 2] = clamp(accel / ACCEL_SCALE, -FEATURE_LIMIT, FEATURE_LIMIT)
-        feats[i, 3] = clamp(crest / CREST_SCALE, -FEATURE_LIMIT, FEATURE_LIMIT)
-        feats[i, 4] = activity
-        feats[i, 5] = clamp(level_db / LEVEL_SCALE, -FEATURE_LIMIT, FEATURE_LIMIT)
         level[i] = level_db
+        slope_a[i] = slope
+        accel_a[i] = accel
+        crest_a[i] = peak_db - rms_db
 
-    return feats, level
+    return {"level": level, "slope": slope_a, "accel": accel_a, "crest": crest_a}
 
 
-def labels_from_level(level_db: np.ndarray) -> np.ndarray:
-    labels = np.zeros(len(level_db), dtype=np.float64)
-    horizon = HORIZON
-    for i in range(len(level_db)):
-        end = min(len(level_db), i + horizon)
-        engage = 0.0
-        for k in range(i, end):
-            value = level_db[k]
-            if value < GATE_DB:
-                continue
-            if abs(value - TARGET_DB) > OFF_TARGET_DB:
-                engage = 1.0
-                break
-        labels[i] = engage
-    return labels
+def desired_gain(level: np.ndarray, target: float, duck: float, boost: float, cut: float) -> np.ndarray:
+    over = level - target
+    pos = over > 0.0
+    shaped = np.where(over < 12.0, (over * over) / 12.0, over)
+    cut_gain = np.maximum(-shaped * duck, -cut)
+    need = -over
+    shaped_boost = np.where(need < 6.0, need * (need / 6.0), need)
+    boost_gain = np.minimum(shaped_boost, boost)
+    return np.where(pos, cut_gain, boost_gain)
+
+
+def shift_forward(values: np.ndarray, samples: int) -> np.ndarray:
+    out = np.empty_like(values)
+    if samples <= 0 or len(values) == 0:
+        return values.copy()
+    if samples >= len(values):
+        out[:] = values[-1]
+        return out
+    out[:-samples] = values[samples:]
+    out[-samples:] = values[-1]
+    return out
+
+
+def control_row(horizon_ms: float, target: float, duck: float, boost: float, cut: float, vad: float, speed: float) -> np.ndarray:
+    return np.array(
+        [
+            clamp((horizon_ms - 1.5) / 38.5, 0.0, 1.0),
+            clamp((target + 20.0) / 20.0, -FEATURE_LIMIT, FEATURE_LIMIT),
+            clamp(duck, 0.0, 1.0),
+            clamp(boost / 6.0, 0.0, 1.0),
+            clamp(cut / 40.0, 0.0, 1.5),
+            clamp((vad + 42.0) / 18.0, -FEATURE_LIMIT, FEATURE_LIMIT),
+            clamp(speed, 0.0, 1.0),
+        ],
+        dtype=np.float64,
+    )
+
+
+def frame_features(trace: dict[str, np.ndarray], index: np.ndarray, target: float, controls: np.ndarray) -> np.ndarray:
+    level = trace["level"][index]
+    audio = np.column_stack(
+        [
+            np.clip(np.abs(level - target) / ERROR_SCALE, 0.0, FEATURE_LIMIT),
+            np.clip(trace["slope"][index] / SLOPE_SCALE, -FEATURE_LIMIT, FEATURE_LIMIT),
+            np.clip(trace["accel"][index] / ACCEL_SCALE, -FEATURE_LIMIT, FEATURE_LIMIT),
+            np.clip(trace["crest"][index] / CREST_SCALE, -FEATURE_LIMIT, FEATURE_LIMIT),
+            np.clip((level - GATE_DB) / 20.0, 0.0, 1.0),
+            np.clip(level / LEVEL_SCALE, -FEATURE_LIMIT, FEATURE_LIMIT),
+        ]
+    )
+    tiled = np.repeat(controls.reshape(1, -1), len(index), axis=0)
+    return np.concatenate([audio, tiled], axis=1)
+
+
+def labels_for(level: np.ndarray, horizon_ms: float, target: float, duck: float, boost: float, cut: float, vad: float) -> np.ndarray:
+    gain = desired_gain(level, target, duck, boost, cut)
+    horizon = max(1, int(round(horizon_ms * 0.001 * SR)))
+    end_level = shift_forward(level, horizon)
+    end_gain = shift_forward(gain, horizon)
+    voiced = level >= vad
+    end_voiced = end_level >= vad
+    sustained = (np.abs(level - target) > OFF_TARGET_DB) & (np.abs(end_level - target) > OFF_TARGET_DB) & voiced & end_voiced
+    boost_move = (gain > 0.5) & (end_gain > 0.5) & voiced & end_voiced
+    # A downward move only engages when the 15 ms attack fits inside the lookahead.
+    track = sustained & (horizon_ms >= 15.0)
+    return (boost_move | track).astype(np.float64)
 
 
 def sine(db: float, n: int, freq: float = 1000.0, phase: float = math.pi / 2) -> np.ndarray:
@@ -122,80 +168,97 @@ def sine(db: float, n: int, freq: float = 1000.0, phase: float = math.pi / 2) ->
     return db_to_amp(db) * np.sin(2.0 * math.pi * freq * t + phase)
 
 
-def clip_examples(samples: np.ndarray, skip: int = int(0.03 * SR)) -> tuple[np.ndarray, np.ndarray]:
-    feats, level = features_from_signal(samples)
-    labels = labels_from_level(level)
-    if len(samples) <= skip + 10:
-        return feats, labels
-    return feats[skip:], labels[skip:]
+def specs_for(rng: np.random.Generator) -> list[tuple[float, float, float, float, float, float, float]]:
+    """Lookahead plus the six knobs. Endpoints and a transparent setting are always present."""
+    specs = [
+        (1.5, -18.0, 0.4, 6.0, 24.0, -42.0, 0.5),
+        (40.0, -18.0, 0.4, 6.0, 24.0, -42.0, 0.5),
+        (40.0, -18.0, 0.0, 0.0, 24.0, -42.0, 0.5),
+        (1.5, -18.0, 0.0, 6.0, 24.0, -42.0, 0.5),
+        (float(rng.uniform(1.5, 40.0)), float(rng.uniform(-40.0, 0.0)), float(rng.uniform(0.0, 1.0)),
+         float(rng.uniform(0.0, 6.0)), float(rng.uniform(0.0, 40.0)), float(rng.uniform(-60.0, -24.0)),
+         float(rng.uniform(0.0, 1.0))),
+    ]
+    return specs
 
 
-def build_dataset() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    rng = np.random.default_rng(7)
-    chunks_x: list[np.ndarray] = []
-    chunks_y: list[np.ndarray] = []
-    hold_x: list[np.ndarray] = []
-    hold_y: list[np.ndarray] = []
+def rows_for(samples: np.ndarray, rng: np.random.Generator, skip: int) -> tuple[np.ndarray, np.ndarray]:
+    trace = detect(samples)
+    index = np.arange(skip, len(samples), 8)
+    if len(index) == 0:
+        return np.zeros((0, INPUT_COUNT)), np.zeros((0,))
+    chunks_x = []
+    chunks_y = []
+    for horizon, target, duck, boost, cut, vad, speed in specs_for(rng):
+        controls = control_row(horizon, target, duck, boost, cut, vad, speed)
+        chunks_x.append(frame_features(trace, index, target, controls))
+        chunks_y.append(labels_for(trace["level"], horizon, target, duck, boost, cut, vad)[index])
+    return np.concatenate(chunks_x), np.concatenate(chunks_y)
 
-    def add(samples: np.ndarray, holdout: bool = False, skip: int = int(0.03 * SR)) -> None:
-        x, y = clip_examples(samples, skip=skip)
-        (hold_x if holdout else chunks_x).append(x)
-        (hold_y if holdout else chunks_y).append(y)
 
+def build_dataset(rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     n = int(0.25 * SR)
-    add(np.zeros(int(0.4 * SR)), skip=int(0.01 * SR))
-    add(sine(-18.0, n))
-    add(sine(-17.0, n))
-    add(sine(-19.0, n))
-    add(sine(-16.5, n))
-    add(sine(-20.0, n, freq=220.0))
+    clips_train: list[tuple[np.ndarray, int]] = []
+    clips_hold: list[tuple[np.ndarray, int]] = []
+
+    def push(samples: np.ndarray, holdout: bool = False, skip: int = int(0.02 * SR)) -> None:
+        (clips_hold if holdout else clips_train).append((samples, skip))
+
+    push(np.zeros(int(0.4 * SR)), skip=int(0.01 * SR))
+    push(sine(-18.0, n))
+    push(sine(-17.0, n))
+    push(sine(-19.0, n))
+    push(sine(-16.5, n))
+    push(sine(-20.0, n, freq=220.0))
 
     for db in (-6.0, -10.0, -12.0, -14.0, -24.0, -30.0, -36.0, -45.0, -54.0):
-        add(sine(db, n, freq=880.0))
+        push(sine(db, n, freq=880.0))
 
-    # Steady levels in 2 dB steps. These define the engage boundary.
     for db in np.arange(-72.0, 1.0, 2.0):
-        add(sine(float(db), int(0.08 * SR), freq=500.0), skip=int(0.02 * SR))
+        push(sine(float(db), int(0.08 * SR), freq=500.0), skip=int(0.02 * SR))
 
-    def step_clip(a: float, b: float, hold: float = 0.12) -> np.ndarray:
-        n_hold = int(hold * SR)
-        env = np.concatenate([
-            np.full(n_hold, db_to_amp(a)),
-            np.full(n_hold, db_to_amp(b)),
-        ])
+    def step_clip(a: float, b: float, hold_s: float = 0.12) -> np.ndarray:
+        n_hold = int(hold_s * SR)
+        env = np.concatenate([np.full(n_hold, db_to_amp(a)), np.full(n_hold, db_to_amp(b))])
         t = np.arange(len(env)) / SR
         return env * np.sin(2.0 * math.pi * 1000.0 * t + math.pi / 2)
 
-    add(step_clip(-18.0, -6.0), skip=int(0.02 * SR))
-    add(step_clip(-18.0, -30.0), skip=int(0.02 * SR))
-    add(step_clip(-30.0, -18.0), skip=int(0.02 * SR))
-    add(step_clip(-12.0, -18.0), skip=int(0.02 * SR))
-    add(step_clip(-18.0, -8.0), holdout=True, skip=int(0.02 * SR))
+    push(step_clip(-18.0, -6.0))
+    push(step_clip(-18.0, -30.0))
+    push(step_clip(-30.0, -18.0))
+    push(step_clip(-12.0, -18.0))
+    push(step_clip(-18.0, -8.0), holdout=True)
 
-    # Ramp across the target in decibels.
     ramp_n = int(0.06 * SR)
     ramp_db = np.linspace(-30.0, -6.0, ramp_n)
     t = np.arange(ramp_n) / SR
-    add(db_to_amp(0.0) * (10.0 ** (ramp_db / 20.0)) * np.sin(2.0 * math.pi * 440.0 * t + math.pi / 2),
-        skip=int(0.005 * SR))
+    push(db_to_amp(0.0) * (10.0 ** (ramp_db / 20.0)) * np.sin(2.0 * math.pi * 440.0 * t + math.pi / 2),
+         skip=int(0.005 * SR))
 
     noise = rng.normal(0.0, db_to_amp(-14.0), int(0.2 * SR))
     burst = np.concatenate([np.zeros(int(0.05 * SR)), noise, np.zeros(int(0.08 * SR))])
-    add(burst, skip=int(0.01 * SR))
+    push(burst, skip=int(0.01 * SR))
 
     tone = sine(-10.0, int(0.3 * SR), freq=660.0)
     tone[int(0.12 * SR):int(0.18 * SR)] = 0.0
-    add(tone, skip=int(0.02 * SR))
+    push(tone)
 
-    # Held-out steady tones at the two operating points the plugin test uses.
-    add(sine(-18.0, int(0.2 * SR), freq=1000.0), holdout=True)
-    add(sine(-6.0, int(0.2 * SR), freq=1000.0), holdout=True)
-    add(np.zeros(int(0.2 * SR)), holdout=True, skip=int(0.01 * SR))
+    push(sine(-18.0, int(0.2 * SR), freq=1000.0), holdout=True)
+    push(sine(-6.0, int(0.2 * SR), freq=1000.0), holdout=True)
+    push(np.zeros(int(0.2 * SR)), holdout=True, skip=int(0.01 * SR))
 
-    x = np.concatenate(chunks_x)
-    y = np.concatenate(chunks_y)
-    hx = np.concatenate(hold_x)
-    hy = np.concatenate(hold_y)
+    def expand(clips: list[tuple[np.ndarray, int]]) -> tuple[np.ndarray, np.ndarray]:
+        xs = []
+        ys = []
+        for samples, skip in clips:
+            x, y = rows_for(samples, rng, skip)
+            if len(y):
+                xs.append(x)
+                ys.append(y)
+        return np.concatenate(xs), np.concatenate(ys)
+
+    x, y = expand(clips_train)
+    hx, hy = expand(clips_hold)
     return x, y, hx, hy
 
 
@@ -213,7 +276,6 @@ def fit_logistic(x: np.ndarray, y: np.ndarray, constraints=(), epochs: int = 500
     pos = max(float(y.sum()), 1.0)
     neg = max(float(len(y) - pos), 1.0)
     sample_w = np.where(y >= 0.5, neg / pos, pos / neg)
-    # A full-scale set is mostly "too loud". Give the quiet side a real vote.
     quiet_engage = (y >= 0.5) & (x[:, 0] > 0.15) & (x[:, 5] < -0.7)
     sample_w = np.where(quiet_engage, sample_w * 3.0, sample_w)
     sample_w /= sample_w.mean()
@@ -221,11 +283,11 @@ def fit_logistic(x: np.ndarray, y: np.ndarray, constraints=(), epochs: int = 500
     for _ in range(epochs):
         p = sigmoid(x @ weights + bias)
         dz = sample_w * (p - y)
-        weights -= lr * ((x.T @ dz) / len(y) + 1e-4 * weights)
+        l2 = np.full(x.shape[1], 1.0e-4, dtype=np.float64)
+        l2[3] = 1.0e-3
+        weights -= lr * ((x.T @ dz) / len(y) + l2 * weights)
         bias -= lr * float(dz.mean())
 
-        # Pull the operating points off the 0.5 line. Classification accuracy
-        # alone leaves a quiet tone at 0.4 and an on-target tone at 0.45.
         for row, bound, direction in constraints:
             z = float(row @ weights + bias)
             probability = float(sigmoid(np.array([z]))[0])
@@ -238,93 +300,78 @@ def fit_logistic(x: np.ndarray, y: np.ndarray, constraints=(), epochs: int = 500
     return weights, bias
 
 
-def fit_mlp(x: np.ndarray, y: np.ndarray, epochs: int = 700, lr: float = 0.15):
-    rng = np.random.default_rng(11)
-    hidden = 4
-    w1 = rng.normal(0.0, 0.35, size=(hidden, x.shape[1]))
-    b1 = np.zeros(hidden)
-    w2 = rng.normal(0.0, 0.35, size=(hidden,))
-    b2 = 0.0
-    # Seed two units so the U-shaped error boundary is reachable immediately.
-    w1[0, 0] = 2.0
-    w1[1, 0] = -2.0
-    w2[0] = 1.5
-    w2[1] = 1.5
-
-    pos = max(float(y.sum()), 1.0)
-    neg = max(float(len(y) - pos), 1.0)
-    sample_w = np.where(y >= 0.5, neg / pos, pos / neg)
-    sample_w /= sample_w.mean()
-
-    for epoch in range(epochs):
-        hidden_pre = x @ w1.T + b1
-        hidden_act = np.tanh(hidden_pre)
-        z = hidden_act @ w2 + b2
-        p = sigmoid(z)
-        dz = sample_w * (p - y) / len(y)
-        dw2 = hidden_act.T @ dz + 1e-4 * w2
-        db2 = float(dz.sum())
-        dh = dz[:, None] * w2
-        dh_pre = dh * (1.0 - hidden_act * hidden_act)
-        dw1 = dh_pre.T @ x + 1e-4 * w1
-        db1 = dh_pre.sum(axis=0)
-        step = lr * (0.6 if epoch > epochs * 0.7 else 1.0)
-        w1 -= step * dw1
-        b1 -= step * db1
-        w2 -= step * dw2
-        b2 -= step * db2
-    return w1, b1, w2, b2
-
-
 def predict_logistic(x: np.ndarray, weights: np.ndarray, bias: float) -> np.ndarray:
     return sigmoid(x @ weights + bias)
 
 
-def predict_mlp(x: np.ndarray, w1: np.ndarray, b1: np.ndarray, w2: np.ndarray, b2: float) -> np.ndarray:
-    hidden_act = np.tanh(x @ w1.T + b1)
-    return sigmoid(hidden_act @ w2 + b2)
+def scenario_features(samples: np.ndarray, horizon_ms: float, skip: int, **knobs) -> np.ndarray:
+    spec = dict(DEFAULT)
+    spec.update(knobs)
+    trace = detect(samples)
+    index = np.arange(skip, len(samples))
+    if len(index) == 0:
+        index = np.arange(len(samples))
+    controls = control_row(horizon_ms, spec["target"], spec["duck"], spec["boost"], spec["cut"], spec["vad"], spec["speed"])
+    return frame_features(trace, index, spec["target"], controls)
 
 
-def region_probability(samples: np.ndarray, predict, skip: int) -> float:
-    feats, _ = features_from_signal(samples)
-    window = feats[skip:]
-    if len(window) == 0:
-        return float(predict(feats).mean())
-    return float(predict(window).mean())
+def mean_feature(samples: np.ndarray, horizon_ms: float, skip: int, **knobs) -> np.ndarray:
+    return scenario_features(samples, horizon_ms, skip, **knobs).mean(axis=0)
 
 
 def listening_checks(predict) -> dict[str, float]:
+    skip = int(0.05 * SR)
     steady = sine(-18.0, int(0.2 * SR))
     hot = sine(-6.0, int(0.2 * SR))
     quiet = sine(-36.0, int(0.2 * SR))
     silence = np.zeros(int(0.2 * SR))
 
     n_hold = int(0.12 * SR)
-    step_n = n_hold * 2
     env = np.concatenate([np.full(n_hold, db_to_amp(-18.0)), np.full(n_hold, db_to_amp(-6.0))])
-    t = np.arange(step_n) / SR
+    t = np.arange(n_hold * 2) / SR
     step = env * np.sin(2.0 * math.pi * 1000.0 * t + math.pi / 2)
-    step_feats, _ = features_from_signal(step)
-    # The step lands on a tick of the 8-sample grid (n_hold is divisible by 8).
-    after = predict(step_feats[n_hold:n_hold + HORIZON])
+    step_trace = detect(step)
+
+    def step_p(horizon_ms: float) -> float:
+        controls = control_row(horizon_ms, -18.0, 0.4, 6.0, 24.0, -42.0, 0.5)
+        feats = frame_features(step_trace, np.array([n_hold]), -18.0, controls)
+        return float(predict(feats)[0])
+
+    def step_max(horizon_ms: float) -> float:
+        controls = control_row(horizon_ms, -18.0, 0.4, 6.0, 24.0, -42.0, 0.5)
+        index = np.arange(n_hold, len(step), 8)
+        feats = frame_features(step_trace, index, -18.0, controls)
+        return float(predict(feats).max())
+
+    def mean_p(samples: np.ndarray, horizon_ms: float, **knobs) -> float:
+        return float(predict(scenario_features(samples, horizon_ms, skip, **knobs)).mean())
 
     return {
-        "steady": region_probability(steady, predict, int(0.05 * SR)),
-        "hot": region_probability(hot, predict, int(0.05 * SR)),
-        "quiet": region_probability(quiet, predict, int(0.05 * SR)),
-        "silence": region_probability(silence, predict, int(0.05 * SR)),
-        "step": float(after.max()) if len(after) else 0.0,
-        "step_first": float(after[0]) if len(after) else 0.0,
+        "steady": mean_p(steady, 40.0),
+        "hot40": mean_p(hot, 40.0),
+        "hot15": mean_p(hot, 1.5),
+        "quiet": mean_p(quiet, 1.5),
+        "quiet_flat": mean_p(quiet, 1.5, boost=0.0, duck=0.0),
+        "silence": mean_p(silence, 40.0),
+        "step40": step_p(40.0),
+        "step15": step_p(1.5),
+        "step15_max": step_max(1.5),
+        "clear40": mean_p(hot, 40.0, duck=0.0, boost=0.0),
     }
 
 
 def checks_pass(scores: dict[str, float]) -> bool:
     return (
         scores["steady"] < 0.35
-        and scores["hot"] > 0.70
+        and scores["hot40"] > 0.70
+        and scores["hot15"] < 0.45
         and scores["quiet"] > 0.60
+        and scores["quiet_flat"] < 0.45
         and scores["silence"] < 0.45
-        and scores["step"] > 0.65
+        and scores["step40"] > 0.65
+        and scores["step15"] < 0.45
+        and scores["step15_max"] < 0.50
+        and scores["clear40"] > 0.55
     )
 
 
@@ -332,24 +379,9 @@ def fmt(values: np.ndarray) -> str:
     return ", ".join(f"{float(v):.8f}f" for v in np.asarray(values).reshape(-1))
 
 
-def write_header(kind: str, payload: dict, path: Path) -> None:
-    if kind == "logistic":
-        kind_expr = "EngageModelKind::logistic"
-        logistic_w = fmt(payload["w"])
-        logistic_b = f"{float(payload['b']):.8f}f"
-        w1 = ", ".join(["0.0f"] * 24)
-        b1 = ", ".join(["0.0f"] * 4)
-        w2 = ", ".join(["0.0f"] * 4)
-        b2 = "0.0f"
-    else:
-        kind_expr = "EngageModelKind::mlp"
-        logistic_w = ", ".join(["0.0f"] * 6)
-        logistic_b = "0.0f"
-        w1 = fmt(payload["w1"])
-        b1 = fmt(payload["b1"])
-        w2 = fmt(payload["w2"])
-        b2 = f"{float(payload['b2']):.8f}f"
-
+def write_header(weights: np.ndarray, bias: float, path: Path) -> None:
+    zeros_w1 = ", ".join(["0.0f"] * (4 * INPUT_COUNT))
+    zeros_b = ", ".join(["0.0f"] * 4)
     text = f"""#pragma once
 
 namespace dsp
@@ -361,21 +393,21 @@ enum class EngageModelKind
     mlp = 1
 }};
 
-// Baked by tools/train_engage.py. Seven floats for the logistic model, or 33
-// for the four-unit hidden layer. Inference is a dot product, not a runtime.
+// Baked by tools/train_engage.py. Thirteen logistic weights: six detector
+// features, then lookahead, target, duck, max boost, max cut, noise floor, speed.
 struct EngageWeights
 {{
-    static constexpr EngageModelKind kind = {kind_expr};
-    static constexpr int inputCount = 6;
+    static constexpr EngageModelKind kind = EngageModelKind::logistic;
+    static constexpr int inputCount = {INPUT_COUNT};
     static constexpr int hiddenCount = 4;
 
-    static constexpr float logisticW[inputCount] = {{ {logistic_w} }};
-    static constexpr float logisticB = {logistic_b};
+    static constexpr float logisticW[inputCount] = {{ {fmt(weights)} }};
+    static constexpr float logisticB = {float(bias):.8f}f;
 
-    static constexpr float mlpW1[hiddenCount * inputCount] = {{ {w1} }};
-    static constexpr float mlpB1[hiddenCount] = {{ {b1} }};
-    static constexpr float mlpW2[hiddenCount] = {{ {w2} }};
-    static constexpr float mlpB2 = {b2};
+    static constexpr float mlpW1[hiddenCount * inputCount] = {{ {zeros_w1} }};
+    static constexpr float mlpB1[hiddenCount] = {{ {zeros_b} }};
+    static constexpr float mlpW2[hiddenCount] = {{ 0.0f, 0.0f, 0.0f, 0.0f }};
+    static constexpr float mlpB2 = 0.0f;
 }};
 
 }} // namespace dsp
@@ -384,7 +416,8 @@ struct EngageWeights
 
 
 def main() -> None:
-    x, y, hx, hy = build_dataset()
+    rng = np.random.default_rng(7)
+    x, y, hx, hy = build_dataset(rng)
     print(f"train frames {len(y)} positive {y.mean():.3f} holdout {len(hy)} positive {hy.mean():.3f}")
 
     skip = int(0.05 * SR)
@@ -392,34 +425,44 @@ def main() -> None:
     step_env = np.concatenate([np.full(n_hold, db_to_amp(-18.0)), np.full(n_hold, db_to_amp(-6.0))])
     step_t = np.arange(n_hold * 2) / SR
     step = step_env * np.sin(2.0 * math.pi * 1000.0 * step_t + math.pi / 2)
-    step_feats, _ = features_from_signal(step)
+    step_trace = detect(step)
 
-    def mean_feature(samples: np.ndarray) -> np.ndarray:
-        feats, _ = features_from_signal(samples)
-        return feats[skip:].mean(axis=0)
+    def step_row(horizon_ms: float) -> np.ndarray:
+        controls = control_row(horizon_ms, -18.0, 0.4, 6.0, 24.0, -42.0, 0.5)
+        return frame_features(step_trace, np.array([n_hold]), -18.0, controls)[0]
 
     constraints = (
-        (mean_feature(sine(-18.0, int(0.2 * SR))), 0.28, "lt"),
-        (mean_feature(sine(-6.0, int(0.2 * SR))), 0.78, "gt"),
-        (mean_feature(sine(-36.0, int(0.2 * SR))), 0.70, "gt"),
-        (mean_feature(np.zeros(int(0.2 * SR))), 0.30, "lt"),
-        (step_feats[n_hold], 0.75, "gt"),
+        (mean_feature(sine(-18.0, int(0.2 * SR)), 40.0, skip), 0.28, "lt"),
+        (mean_feature(sine(-6.0, int(0.2 * SR)), 40.0, skip), 0.78, "gt"),
+        (mean_feature(sine(-6.0, int(0.2 * SR)), 1.5, skip), 0.32, "lt"),
+        (mean_feature(sine(-36.0, int(0.2 * SR)), 1.5, skip), 0.70, "gt"),
+        (mean_feature(sine(-36.0, int(0.2 * SR)), 1.5, skip, boost=0.0, duck=0.0), 0.32, "lt"),
+        (mean_feature(np.zeros(int(0.2 * SR)), 40.0, skip), 0.25, "lt"),
+        (mean_feature(sine(-6.0, int(0.2 * SR)), 40.0, skip, duck=0.0, boost=0.0), 0.62, "gt"),
+        (step_row(1.5), 0.30, "lt"),
+        (step_row(1.5), 0.30, "lt"),
+        (step_row(1.5), 0.30, "lt"),
+        (step_row(40.0), 0.80, "gt"),
+        (step_row(40.0), 0.80, "gt"),
     )
+    crest_index = np.arange(n_hold, n_hold + int(0.002 * SR), 8)
+    crest_controls = control_row(1.5, -18.0, 0.4, 6.0, 24.0, -42.0, 0.5)
+    crest_rows = frame_features(step_trace, crest_index, -18.0, crest_controls)
+    constraints = constraints + tuple((row, 0.40, "lt") for row in crest_rows)
 
     weights, bias = fit_logistic(x, y, constraints)
-    logistic_hold = accuracy(predict_logistic(hx, weights, bias), hy)
-    logistic_scores = listening_checks(lambda z: predict_logistic(z, weights, bias))
-    print(f"logistic holdout {logistic_hold:.3f} scores {logistic_scores}")
-    print("weights " + " ".join(f"{float(v):.6f}" for v in weights) + f" bias {bias:.6f}")
+    hold = accuracy(predict_logistic(hx, weights, bias), hy)
+    scores = listening_checks(lambda z: predict_logistic(z, weights, bias))
+    print(f"logistic holdout {hold:.3f} scores {scores}")
+    print("weights " + " ".join(f"{float(v):.4f}" for v in weights) + f" bias {bias:.4f}")
 
-    if logistic_hold < 0.90 or not checks_pass(logistic_scores):
+    if hold < 0.90 or not checks_pass(scores):
         raise SystemExit("logistic engage model did not clear the held-out bar or the listening checks")
 
     root = Path(__file__).resolve().parents[1]
     header = root / "Source" / "EngageWeights.h"
-    header.parent.mkdir(parents=True, exist_ok=True)
-    write_header("logistic", {"w": weights, "b": bias}, header)
-    print(f"wrote {header} kind logistic")
+    write_header(weights, bias, header)
+    print(f"wrote {header}")
 
 
 if __name__ == "__main__":

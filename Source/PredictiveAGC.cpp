@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <cmath>
 
+static_assert(dsp::EngageWeights::inputCount == 13, "engage features are six measurements plus seven controls");
+
 namespace dsp
 {
 namespace
@@ -31,20 +33,33 @@ double PredictiveAGC::timeCoef(double seconds, double rate)
 
 int PredictiveAGC::latencySamplesFor(double rate)
 {
+    return latencySamplesFor(rate, 1.5f);
+}
+
+int PredictiveAGC::latencySamplesFor(double rate, float lookaheadMs)
+{
     if (rate <= 0.0)
         return 1;
 
-    int samples = static_cast<int>(std::llround(0.0015 * rate));
+    const float ms = std::clamp(lookaheadMs, 1.5f, 40.0f);
+    int samples = static_cast<int>(std::llround(static_cast<double>(ms) * 0.001 * rate));
     if (samples < 1)
         samples = 1;
 
-    while (samples > 1 && (static_cast<double>(samples) / rate) >= 0.002)
-        --samples;
+    // The short end stays under 2 ms when the host rounds the 1.5 ms setting up.
+    if (ms <= 1.51f)
+    {
+        while (samples > 1 && (static_cast<double>(samples) / rate) >= 0.002)
+            --samples;
+    }
+
+    if (samples > Channel::delayCapacity)
+        samples = Channel::delayCapacity;
 
     return samples;
 }
 
-float PredictiveAGC::modelProbability(const float features[6])
+float PredictiveAGC::modelProbability(const float* features)
 {
     const auto squash = [](float z)
     {
@@ -100,9 +115,7 @@ void PredictiveAGC::prepare(double newSampleRate, int numChannels)
 {
     sampleRate = newSampleRate > 0.0 ? newSampleRate : 48000.0;
     preparedChannels = std::clamp(numChannels, 0, maxChannels);
-    latency = latencySamplesFor(sampleRate);
-    if (latency > Channel::delayCapacity)
-        latency = Channel::delayCapacity;
+    latency = latencySamplesFor(sampleRate, lookaheadMs);
 
     updateCoefficients();
     reset();
@@ -138,6 +151,13 @@ void PredictiveAGC::setSpeed(float normalised)
     speed = std::clamp(normalised, 0.0f, 1.0f);
     if (sampleRate > 0.0)
         updateCoefficients();
+}
+
+void PredictiveAGC::setLookaheadMilliseconds(float ms)
+{
+    lookaheadMs = std::clamp(ms, 1.5f, 40.0f);
+    if (sampleRate > 0.0)
+        latency = latencySamplesFor(sampleRate, lookaheadMs);
 }
 
 void PredictiveAGC::setLinked(bool shouldLink) { linked = shouldLink; }
@@ -211,13 +231,24 @@ void PredictiveAGC::updateDetector(Channel& channel, float magnitude)
 
     if ((channel.sampleCount % inferInterval) == 0)
     {
-        const float features[6] = {
+        // Feature order is the contract with tools/train_engage.py.
+        const float horizon = std::clamp((lookaheadMs - 1.5f) / 38.5f, 0.0f, 1.0f);
+        const float targetFeat = std::clamp((targetDb + 20.0f) / 20.0f, -3.0f, 3.0f);
+        const float vadFeat = std::clamp((vadThresholdDb + 42.0f) / 18.0f, -3.0f, 3.0f);
+        const float features[EngageWeights::inputCount] = {
             clampedFeature(std::abs(levelDb - static_cast<double>(targetDb)), 24.0),
             clampedFeature(channel.slope, 20.0),
             clampedFeature(channel.acceleration, 50.0),
             clampedFeature(peakDb - rmsDb, 12.0),
             static_cast<float>(std::clamp((levelDb - gateDb) / 20.0, 0.0, 1.0)),
-            clampedFeature(levelDb, 40.0)
+            clampedFeature(levelDb, 40.0),
+            horizon,
+            targetFeat,
+            duck,
+            maxBoostDb / maxBoostCeilingDb,
+            std::clamp(maxCutDb / 40.0f, 0.0f, 1.5f),
+            vadFeat,
+            speed
         };
         channel.probability = modelProbability(features);
 
@@ -312,6 +343,9 @@ float PredictiveAGC::readDelay(Channel& channel, float input)
 {
     if (latency <= 0)
         return input;
+
+    if (channel.writeIndex >= latency)
+        channel.writeIndex = 0;
 
     const float delayed = channel.delayStorage[channel.writeIndex];
     channel.delayStorage[channel.writeIndex] = input;

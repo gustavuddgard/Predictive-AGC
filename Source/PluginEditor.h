@@ -34,6 +34,7 @@ private:
     juce::Label floorName;
     juce::Label duckName;
     juce::Label speedName;
+    juce::Label lookaheadName;
     juce::Label depthName;
     juce::Label thresholdName;
     juce::Label releaseName;
@@ -45,6 +46,7 @@ private:
     juce::Slider noiseFloor;
     juce::Slider duckAmount;
     juce::Slider speed;
+    juce::Slider lookahead;
     juce::Slider depth;
     juce::Slider scThreshold;
     juce::Slider scRelease;
@@ -60,6 +62,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> floorAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> duckAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> speedAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lookaheadAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> depthAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> thresholdAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> releaseAttachment;

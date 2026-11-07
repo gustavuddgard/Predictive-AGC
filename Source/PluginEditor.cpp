@@ -124,6 +124,7 @@ Agc2AudioProcessorEditor::Agc2AudioProcessorEditor(Agc2AudioProcessor& owner)
     configureKnob(noiseFloor, floorName, "Noise floor");
     configureKnob(duckAmount, duckName, "Duck");
     configureKnob(speed, speedName, "Speed");
+    configureKnob(lookahead, lookaheadName, "Lookahead");
     configureKnob(depth, depthName, "Depth");
     configureKnob(scThreshold, thresholdName, "Threshold");
     configureKnob(scRelease, releaseName, "Release");
@@ -152,6 +153,7 @@ Agc2AudioProcessorEditor::Agc2AudioProcessorEditor(Agc2AudioProcessor& owner)
     floorAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "vad", noiseFloor);
     duckAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "duck", duckAmount);
     speedAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "speed", speed);
+    lookaheadAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "lookahead", lookahead);
     depthAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "duckDepth", depth);
     thresholdAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "scThreshold", scThreshold);
     releaseAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(state, "scRelease", scRelease);
@@ -271,7 +273,7 @@ void Agc2AudioProcessorEditor::resized()
     area.removeFromTop(6);
     levelerHeading.setBounds(area.removeFromTop(16));
     auto levelerKnobs = area.removeFromTop(158);
-    const int levelerSlot = levelerKnobs.getWidth() / 6;
+    const int levelerSlot = levelerKnobs.getWidth() / 7;
 
     auto place = [](juce::Rectangle<int>& row, int slotWidth, juce::Label& name, juce::Slider& slider)
     {
@@ -286,6 +288,7 @@ void Agc2AudioProcessorEditor::resized()
     place(levelerKnobs, levelerSlot, floorName, noiseFloor);
     place(levelerKnobs, levelerSlot, duckName, duckAmount);
     place(levelerKnobs, levelerSlot, speedName, speed);
+    place(levelerKnobs, levelerSlot, lookaheadName, lookahead);
 
     area.removeFromTop(4);
     sidechainHeading.setBounds(area.removeFromTop(16));

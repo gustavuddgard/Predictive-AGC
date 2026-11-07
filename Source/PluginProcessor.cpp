@@ -54,6 +54,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout Agc2AudioProcessor::createPa
         juce::NormalisableRange<float> { 0.0f, 40.0f, 0.1f }, 24.0f, decibelText()));
 
     layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID { "lookahead", 1 }, "Lookahead",
+        juce::NormalisableRange<float> { 1.5f, 40.0f, 0.1f, 0.5f }, 1.5f,
+        juce::AudioParameterFloatAttributes()
+            .withLabel("ms")
+            .withStringFromValueFunction([](float value, int)
+            {
+                return juce::String(value, 1);
+            })));
+
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID { "speed", 1 }, "Speed",
         juce::NormalisableRange<float> { 0.0f, 1.0f, 0.01f }, 0.5f,
         juce::AudioParameterFloatAttributes()
@@ -113,6 +123,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout Agc2AudioProcessor::createPa
 void Agc2AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
     const int mainChannels = std::max(1, getMainBusNumInputChannels());
+    mAGC.setLookaheadMilliseconds(apvts.getRawParameterValue("lookahead")->load());
     mAGC.prepare(sampleRate, mainChannels);
     mDucker.prepare(sampleRate, mainChannels);
     setLatencySamples(mAGC.getLatencySamples() + mDucker.getLatencySamples());
@@ -151,6 +162,7 @@ void Agc2AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mi
     mAGC.setVadThresholdDecibels(apvts.getRawParameterValue("vad")->load());
     mAGC.setDuck(apvts.getRawParameterValue("duck")->load());
     mAGC.setSpeed(apvts.getRawParameterValue("speed")->load());
+    mAGC.setLookaheadMilliseconds(apvts.getRawParameterValue("lookahead")->load());
     mAGC.setLinked(apvts.getRawParameterValue("link")->load() >= 0.5f);
     mAGC.setBypassed(apvts.getRawParameterValue("bypass")->load() >= 0.5f);
 
@@ -180,6 +192,10 @@ void Agc2AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mi
         mDucker.process(mainBus.getArrayOfWritePointers(), mainBus.getNumChannels(),
                         sidechain, sidechainChannels, mainBus.getNumSamples());
     }
+
+    const int latency = mAGC.getLatencySamples() + mDucker.getLatencySamples();
+    if (latency != getLatencySamples())
+        setLatencySamples(latency);
 
     displayedGainDb.store(mAGC.getGainDecibels(), std::memory_order_relaxed);
     displayedEngage.store(mAGC.getEngageProbability(), std::memory_order_relaxed);
@@ -226,6 +242,7 @@ struct Program
     float duck;
     float vad;
     float speed;
+    float lookahead;
     float depth;
     float threshold;
     float release;
@@ -239,8 +256,8 @@ struct Program
 // the whole song. This program only trims hits that reach -6 dB, with no boost
 // and a slow release, so the riff is not ridden.
 const Program programs[] = {
-    { "Default", -18.0f, 6.0f, 24.0f, 0.40f, -42.0f, 0.50f, 0.50f, -24.0f, 300.0f, 300.0f, -45.0f, true },
-    { "Money for Nothing", -6.0f, 0.0f, 3.0f, 0.15f, -30.0f, 0.00f, 0.00f, 0.0f, 1000.0f, 300.0f, -20.0f, true },
+    { "Default", -18.0f, 6.0f, 24.0f, 0.40f, -42.0f, 0.50f, 1.5f, 0.50f, -24.0f, 300.0f, 300.0f, -45.0f, true },
+    { "Money for Nothing", -6.0f, 0.0f, 3.0f, 0.15f, -30.0f, 0.00f, 1.5f, 0.00f, 0.0f, 1000.0f, 300.0f, -20.0f, true },
 };
 } // namespace
 
@@ -289,6 +306,7 @@ void Agc2AudioProcessor::applyProgram(int index)
     setFloat("duck", program.duck);
     setFloat("vad", program.vad);
     setFloat("speed", program.speed);
+    setFloat("lookahead", program.lookahead);
     setFloat("duckDepth", program.depth);
     setFloat("scThreshold", program.threshold);
     setFloat("scRelease", program.release);
